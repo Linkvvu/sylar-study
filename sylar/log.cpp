@@ -1,9 +1,10 @@
 #include "log.h"
 
-#include <unordered_map>
-#include <iostream>
+#include <cstdarg>
+#include <cstring>
 #include <cassert>
 #include <iomanip>
+#include <iostream>
 
 #if defined(__unix__)
 	#include <time.h>
@@ -41,6 +42,27 @@ std::shared_ptr<LogEvent> LogEvent::NewLogEvent(std::string msg, LogLevel::Level
 		l
 	}));
 	return new_event;
+}
+
+void sylar::LogEvent::SetMessage(std::string msg) {
+	message_stream << std::move(msg);
+}
+
+void sylar::LogEvent::SetMessage(const char* fmt, ...) {
+	va_list al;
+	va_start(al, fmt);
+
+	/// @note vasprintf() is a part of GNU extension, reference: https://linux.die.net/man/3/vasprintf
+	///		  C standard lib: vfprintf(), reference: https://zh.cppreference.com/w/c/io/vfprintf
+
+	char* buf = nullptr;
+	int len = vasprintf(&buf, fmt, al);
+	if (len != -1) {
+		message_stream << std::string(buf, len);
+		free(buf);
+	}
+
+	va_end(al);
 }
 
 LogEventWrapper::~LogEventWrapper() {
@@ -248,7 +270,7 @@ void LogFormatter::init() {
 					i += 1;
 					state = State::kBrace;
 				} else {
-					std::cerr << "Invalid pattern: " << pattern_;
+					std::cerr << "Invalid datetime pattern: " << pattern_;
 					available_ = false;
 					return;
 				}
@@ -327,4 +349,34 @@ void Logger::Log(const std::shared_ptr<LogEvent>& event) const {
  */
 void Logger::AddAppender(std::shared_ptr<const LogAppender> appender) {
 	appenderArray_.push_back(std::move(appender));
+}
+
+LoggerManager::LoggerManager()
+	: defaultLogger_(std::make_shared<Logger>())
+	, loggers_()
+{
+	auto default_appender = std::make_shared<StreamLogAppender>(std::cout);
+	default_appender->SetFormatter(std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m%n"));
+	defaultLogger_->AddAppender(default_appender);
+
+	loggers_[defaultLogger_->GetName()] = defaultLogger_;
+}
+
+std::shared_ptr<Logger> LoggerManager::GetLogger(std::string name) const {
+	auto it = loggers_.find(std::move(name));
+	if (it == loggers_.end()) {
+		SYLAR_LOG_WARN(SYLAR_DEF_LOGGER()) << "Has not logger named '" << name << "', returns the default logger.";
+		return defaultLogger_;
+	}
+
+	return it->second;
+}
+
+void sylar::LoggerManager::AddLogger(std::shared_ptr<Logger> newer, std::shared_ptr<Logger>* older) {
+	const std::string& name = newer->GetName();
+	auto it = loggers_.find(name);
+	if (it != loggers_.end() && older) {
+		*older = loggers_[name];
+	}
+	loggers_[name] = newer;
 }
