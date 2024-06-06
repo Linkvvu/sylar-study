@@ -7,6 +7,7 @@
 #include <vector>
 #include <chrono>
 #include <sstream>
+#include <functional>
 #include <unordered_map>
 
 #define SYLAR_DEF_LOGGER_NAME "DEFAULT-LOGGER"
@@ -39,9 +40,6 @@
 #define SYLAR_LOG_FATAL(logger)	\
 	SYLAR_LOG_LEVEL(logger, sylar::LogLevel::Level::kFatal)
 
-#define SYLAR_DEF_LOGGER()	\
-	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger(SYLAR_DEF_LOGGER_NAME)
-
 #define SYLAR_LOG_FMT_LEVEL(logger, level, fmt, ...)	\
     if (level >= logger->GetLevel())	\
 		sylar::LogEventWrapper(std::shared_ptr<sylar::LogEvent>(new sylar::LogEvent({	\
@@ -70,6 +68,11 @@
 #define SYLAR_LOG_FMT_FATAL(logger, fmt, ...)	\
 	SYLAR_LOG_FMT_LEVEL(logger, sylar::LogLevel::kFatal, fmt, __VA_ARGS__)
 
+#define SYLAR_DEF_LOGGER()	\
+	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger(SYLAR_DEF_LOGGER_NAME)
+
+#define SYLAR_SYS_LOGGER()	\
+	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger("System")
 
 
 namespace sylar {
@@ -245,6 +248,9 @@ namespace sylar {
 		 * @param older  Point to the older logger(Passing out), if exist
 		 */
 		void AddLogger(std::shared_ptr<Logger> newer, std::shared_ptr<Logger>* older = nullptr);
+
+	private:
+		void init(std::function<void(const std::vector<std::shared_ptr<Logger>>& appenders)> func);
 
 	private:
 		std::shared_ptr<Logger> defaultLogger_;

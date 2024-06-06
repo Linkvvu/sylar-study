@@ -356,10 +356,19 @@ LoggerManager::LoggerManager()
 	, loggers_()
 {
 	auto default_appender = std::make_shared<StreamLogAppender>(std::cout);
-	default_appender->SetFormatter(std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m%n"));
+	auto std_out_formatter = std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m%n");
+	default_appender->SetFormatter(std_out_formatter);
 	defaultLogger_->AddAppender(default_appender);
 
 	loggers_[defaultLogger_->GetName()] = defaultLogger_;
+
+	auto init_loggers = [&default_appender](const std::vector<std::shared_ptr<Logger>>& loggers) {
+		for (const auto& logger_ptr : loggers) {
+			logger_ptr->AddAppender(default_appender);
+		}
+	};
+
+	init(std::move(init_loggers));
 }
 
 std::shared_ptr<Logger> LoggerManager::GetLogger(std::string name) const {
@@ -372,11 +381,17 @@ std::shared_ptr<Logger> LoggerManager::GetLogger(std::string name) const {
 	return it->second;
 }
 
-void sylar::LoggerManager::AddLogger(std::shared_ptr<Logger> newer, std::shared_ptr<Logger>* older) {
+void LoggerManager::AddLogger(std::shared_ptr<Logger> newer, std::shared_ptr<Logger>* older) {
 	const std::string& name = newer->GetName();
 	auto it = loggers_.find(name);
 	if (it != loggers_.end() && older) {
 		*older = loggers_[name];
 	}
 	loggers_[name] = newer;
+}
+
+void LoggerManager::init(std::function<void(const std::vector<std::shared_ptr<Logger>>& appenders)> func) {
+	auto system_logger = std::make_shared<Logger>("System");
+	func({system_logger});
+	AddLogger(std::move(system_logger));
 }
