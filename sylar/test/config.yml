@@ -1,0 +1,16 @@
+person:
+  name: CXX
+  age: 22
+  email:
+    - wuhaocoding@163.com
+    - wuhaocoding@gmail.com
+
+std.set:
+  - 10.10
+  - 20.20
+
+std:
+  map:
+    1: XXX
+    2: YYY
+    3: ZZZ
