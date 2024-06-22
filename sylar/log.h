@@ -221,6 +221,8 @@ namespace sylar {
 		const std::string name_;
 		LogLevel::Level level_ = LogLevel::Level::kDebug;
 		std::vector<std::shared_ptr<const LogAppender>> appenderArray_;
+		std::shared_ptr<LogFormatter> formatter_;
+		std::shared_ptr<Logger> parent_;	///> parent logger. @note avoid circle dependence
 	};
 
 
