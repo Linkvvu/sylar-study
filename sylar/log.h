@@ -222,7 +222,7 @@ namespace sylar {
 		LogLevel::Level level_ = LogLevel::Level::kDebug;
 		std::vector<std::shared_ptr<const LogAppender>> appenderArray_;
 		std::shared_ptr<LogFormatter> formatter_;
-		std::shared_ptr<Logger> parent_;	///> parent logger. @note avoid circle dependence
+		std::shared_ptr<Logger> parent_;	///> parent logger. @note avoids circle dependence
 	};
 
 
