@@ -305,8 +305,6 @@ namespace sylar {
 		virtual std::string ToString() const override;
 
 	private:
-		std::string name_;
-		std::string desc_;
 		T val_;
 	};
 
@@ -374,13 +372,13 @@ void sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::FromString(const std::st
 		SetVal(FromStrFunctor()(str));
 	} catch (const boost::bad_lexical_cast& e) {
 		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "ConfigVar::FromString lexical cast exception: %s; config-name=%s, invalid yaml doc=%s",
-				e.what(), name_.c_str(), str.c_str());
+				e.what(), GetName().c_str(), str.c_str());
 	} catch (const YAML::ParserException& e) {
 		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "ConfigVar::FromString parsing yaml exception: %s; config-name=%s, invalid yaml doc: %s",
-				e.what(), name_.c_str(), str.c_str());
+				e.what(), GetName().c_str(), str.c_str());
 	} catch (const std::exception& e) {
 		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "ConfigVar::FromString unexpected exception: %s; config-name=%s, yaml doc: %s",
-			e.what(), name_.c_str(), str.c_str());
+			e.what(), GetName().c_str(), str.c_str());
 	}
 }
 
@@ -391,13 +389,13 @@ std::string sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::ToString() const 
 		res = ToStrFunctor()(val_);
 	} catch (const boost::bad_lexical_cast& e) {
 		SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "ConfigVar::ToString lexical cast exception: " << e.what()
-										<< "; config-name=" << name_;
+										<< "; config-name=" << GetName();
 	} catch (const YAML::ParserException& e) {
 		SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "ConfigVar::ToString parsing yaml exception: " << e.what()
-										<< "; config-name=" << name_;
+										<< "; config-name=" << GetName();
 	} catch (const std::exception& e) {
 		SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "ConfigVar::ToString unexpected exception: " << e.what()
-										<< "; config-name=" << name_;
+										<< "; config-name=" << GetName();
 	}
     return res;
 }
