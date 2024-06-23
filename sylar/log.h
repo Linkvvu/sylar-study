@@ -6,11 +6,13 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cassert>
 #include <sstream>
 #include <functional>
 #include <unordered_map>
 
-#define SYLAR_DEF_LOGGER_NAME "DEFAULT-LOGGER"
+#define SYLAR_ROOT_LOGGER_NAME "ROOT"
+#define SYLAR_SYSTEM_LOGGER_NAME "SYS"
 
 #define SYLAR_LOG_LEVEL(logger, level)	\
 	if (level >= logger->GetLevel()) 	\
@@ -68,16 +70,19 @@
 #define SYLAR_LOG_FMT_FATAL(logger, fmt, ...)	\
 	SYLAR_LOG_FMT_LEVEL(logger, sylar::LogLevel::kFatal, fmt, __VA_ARGS__)
 
-#define SYLAR_DEF_LOGGER()	\
-	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger(SYLAR_DEF_LOGGER_NAME)
+#define SYLAR_ROOT_LOGGER()	\
+	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger(SYLAR_ROOT_LOGGER_NAME)
+
+#define SYLAR_GET_LOGGER(name)	\
+	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger(name)
 
 #define SYLAR_SYS_LOGGER()	\
-	sylar::Singleton<sylar::LoggerManager>::GetInstance().GetLogger("System")
-
+	SYLAR_GET_LOGGER(SYLAR_SYSTEM_LOGGER_NAME)
 
 namespace sylar {
 
 	class LoggerManager;	/// forward declaration
+	class LogAppender;		/// forward declaration
 	class Logger;			/// forward declaration
 
 	struct LogLevel {
@@ -105,7 +110,7 @@ namespace sylar {
 		std::string GetMessage() const
 		{ return message_stream.str(); }
 
-		std::shared_ptr<Logger> agent_logger;
+		std::shared_ptr<Logger> trigger;
 		std::ostringstream message_stream;
 		std::time_t time;
 		std::uint32_t line_num;
@@ -114,6 +119,8 @@ namespace sylar {
 		unsigned long routine_id;
 		LogLevel::Level level;
 	};
+
+
 
 	class LogEventWrapper {
 	public:
@@ -131,6 +138,7 @@ namespace sylar {
 	};
 
 
+
 	class LogFormatter {
 	public:
 		explicit LogFormatter(std::string pattern);
@@ -142,9 +150,13 @@ namespace sylar {
 			virtual ~AbsFormatterItem() noexcept = default;
 			virtual std::string DoFormat(const std::shared_ptr<LogEvent>& event) const = 0;
 		};
+
 	private:
 		void init();
-
+		void HandleDoublePercentState();
+		void HandlePercentAfterTextState(size_t begin, size_t end);
+		void HandleTryAddItemState(char c);
+		void HandleTimeFormatEndState(size_t begin, size_t end);
 	private:
 		const std::string pattern_;
 		std::vector<std::shared_ptr<AbsFormatterItem>> items_;
@@ -153,43 +165,11 @@ namespace sylar {
 
 
 
-	class LogAppender {
-	public:
-		virtual void Log(const std::shared_ptr<LogEvent>& event) const = 0;
-
-		void SetFormatter(std::shared_ptr<LogFormatter> formatter)
-		{ formatter_ = std::move(formatter); }
-
-		const std::shared_ptr<LogFormatter>& GetFormatter() const
-		{ return formatter_; }
-
-		virtual ~LogAppender() noexcept = default;
-
-	protected:
-		/// TODO:
-		///		level filed
-
-		std::shared_ptr<LogFormatter> formatter_;
-	};
-
-
-
-	class StreamLogAppender : public LogAppender {
-	public:
-		explicit StreamLogAppender(std::ostream& out_stream);
-
-		virtual void Log(const std::shared_ptr<LogEvent>& event) const override;
-
-	private:
-		std::ostream& targetOutStream_;
-	};
-
-
-
 	class Logger {
-	public:
-		explicit Logger(std::string name = SYLAR_DEF_LOGGER_NAME);
+		friend LoggerManager;
+		explicit Logger(std::string name);
 
+	public:
 		void Log(const std::shared_ptr<LogEvent>& event) const;
 
 		void Debug(std::string msg) const
@@ -207,7 +187,24 @@ namespace sylar {
 		void Fatal(std::string msg) const
 		{ Log(LogEvent::NewLogEvent(std::move(msg), LogLevel::kFatal)); }
 
-		void AddAppender(std::shared_ptr<const LogAppender> appender);
+		void AddAppender(std::shared_ptr<LogAppender> appender);
+
+		const std::shared_ptr<LogFormatter>& GetFormatter() const
+		{ return formatter_; }
+
+		void SetFormatter(const std::shared_ptr<LogFormatter>& formatter);
+
+		const std::shared_ptr<Logger>& GetParent() const
+		{ return parent_; }
+
+		void SetParent(std::shared_ptr<Logger> parent) {
+			// avoids cyclic dependence
+			assert(parent.get() != this);
+			assert(parent->GetParent().get() != this);
+
+			// use std::swap -> avoid self assignment
+			std::swap(parent, parent_);
+		}
 
 		const std::string& GetName() const
 		{ return name_; }
@@ -216,11 +213,47 @@ namespace sylar {
 		{ return level_; }
 
 	private:
-
-	private:
 		const std::string name_;
 		LogLevel::Level level_ = LogLevel::Level::kDebug;
-		std::vector<std::shared_ptr<const LogAppender>> appenderArray_;
+		std::vector<std::shared_ptr<LogAppender>> appenderArray_;
+		std::shared_ptr<LogFormatter> formatter_;
+		std::shared_ptr<Logger> parent_;
+	};
+
+
+
+	class LogAppender {
+		friend void Logger::SetFormatter(const std::shared_ptr<LogFormatter>& formatter);
+	public:
+		virtual void Log(const std::shared_ptr<LogEvent>& event) const = 0;
+
+		void SetFormatter(std::shared_ptr<LogFormatter> formatter);
+
+		const std::shared_ptr<LogFormatter>& GetFormatter() const
+		{ return formatter_; }
+
+		bool HasSpecialFormatter() const
+		{ return hasSpecialFormatter; }
+
+		virtual ~LogAppender() noexcept = default;
+
+	protected:
+		/// TODO:
+		///		level filed
+		bool hasSpecialFormatter = false;
+		std::shared_ptr<LogFormatter> formatter_;
+	};
+
+
+
+	class StreamLogAppender : public LogAppender {
+	public:
+		explicit StreamLogAppender(std::ostream& out_stream);
+
+		virtual void Log(const std::shared_ptr<LogEvent>& event) const override;
+
+	private:
+		std::ostream& targetOutStream_;
 	};
 
 
@@ -236,24 +269,17 @@ namespace sylar {
 		/**
 		 * @brief Get the Logger object from the set
 		 *
-		 * @param name
-		 * @return std::shared_ptr<Logger>
+		 * @param name  目标Logger唯一ID名
+		 * @return std::shared_ptr<Logger>  返回目标Logger示例，若目标Logger不存在，则创建实例并返回
 		 */
-		std::shared_ptr<Logger> GetLogger(std::string name) const;
-
-		/**
-		 * @brief Add a new logger to the set.
-		 *
-		 * @param newer  The newer logger
-		 * @param older  Point to the older logger(Passing out), if exist
-		 */
-		void AddLogger(std::shared_ptr<Logger> newer, std::shared_ptr<Logger>* older = nullptr);
+		std::shared_ptr<Logger> GetLogger(const std::string& name);
 
 	private:
-		void init(std::function<void(const std::vector<std::shared_ptr<Logger>>& appenders)> func);
+		std::shared_ptr<Logger> InitLoggerAndAppend(const std::string& name);
+
 
 	private:
-		std::shared_ptr<Logger> defaultLogger_;
+		std::shared_ptr<Logger> rootLogger_;
 		std::unordered_map<std::string, std::shared_ptr<Logger>> loggers_;
 	};
 

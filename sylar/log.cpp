@@ -32,7 +32,7 @@ std::string LogLevel::ToString(Level l) {
 std::shared_ptr<LogEvent> LogEvent::NewLogEvent(std::string msg, LogLevel::Level l) {
 	std::ostringstream oss(std::move(msg));
     std::shared_ptr<LogEvent> new_event(new LogEvent({
-		std::make_shared<Logger>(nullptr),
+		std::shared_ptr<Logger>(nullptr),
 		std::move(oss),
 		std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
 		__LINE__,
@@ -66,7 +66,7 @@ void sylar::LogEvent::SetMessage(const char* fmt, ...) {
 }
 
 LogEventWrapper::~LogEventWrapper() {
-	event_->agent_logger->Log(event_);
+	event_->trigger->Log(event_);
 }
 
 // ----------------------------------------------------------------------------------------------------
@@ -82,13 +82,13 @@ public:
 	}
 };
 
-class RawStrFormatterItem : public LogFormatter::AbsFormatterItem {
+class TextFormatterItem : public LogFormatter::AbsFormatterItem {
 public:
-	explicit RawStrFormatterItem(std::string str)
+	explicit TextFormatterItem(std::string str)
 		: str_(str)
 		{}
 
-	virtual ~RawStrFormatterItem() noexcept override = default;
+	virtual ~TextFormatterItem() noexcept override = default;
 
 	virtual std::string DoFormat(const std::shared_ptr<LogEvent>& event) const {
 		return str_;
@@ -183,8 +183,8 @@ public:
 	virtual ~LoggerNameFormatterItem() noexcept override = default;
 
 	virtual std::string DoFormat(const std::shared_ptr<LogEvent>& event) const {
-		assert(event->agent_logger);
-		return event->agent_logger->GetName();
+		assert(event->trigger);
+		return event->trigger->GetName();
 	}
 };
 
@@ -210,6 +210,14 @@ public:
 
 // =====================================================================================================
 
+void LogAppender::SetFormatter(std::shared_ptr<LogFormatter> formatter) {
+	using namespace std;
+	swap(this->formatter_, formatter);
+
+	this->formatter_ ? hasSpecialFormatter = true : hasSpecialFormatter = false;
+}
+
+
 LogFormatter::LogFormatter(std::string pattern)
 	: pattern_(pattern)
 {
@@ -217,99 +225,127 @@ LogFormatter::LogFormatter(std::string pattern)
 }
 
 void LogFormatter::init() {
-	static std::unordered_map<char, std::shared_ptr<AbsFormatterItem>> ls_formatter_item_set {
-		{'m', std::make_shared<MsgFormatterItem>()},
-		{'c', std::make_shared<LoggerNameFormatterItem>()},
-		{'L', std::make_shared<logLevelFormatterItem>()},
-		{'l', std::make_shared<LineNumFormatterItem>()},
-		{'t', std::make_shared<TabFormatterItem>()},
-		{'n', std::make_shared<NewLineFormatterItem>()},
-		{'f', std::make_shared<FileNameFormatterItem>()},
-		{'T', std::make_shared<ThreadIdFormatterItem>()},
-		{'R', std::make_shared<RoutineIdFormatterItem>()},
+	enum class Event : size_t {
+		kPercent,	// %
+		kAlphaD,	// d
+		kBrace,		// {
+		kBackBrace,	// }
+		kOther		// others
 	};
 
-	enum class State {
-		kText,		// 普通文本状态
-		kPercent,	// 遇到%后的状态，准备解析格式标识符
-		kBrace,		// 遇到{后的状态，准备解析时间格式字符串
+	enum class State : size_t {
+		kStart,
+		kTextBegin,
+		kTextKeep,
+		kPercentAfterText,
+		kSinglePercent,
+		kTryAddItem,
+		kDoublePercent,
+		kWaitBrace,
+		kTimeFormatBegin,
+		kTimeFormatKeep,
+		kTimeFormatEnd,
+		kInvalid
 	};
 
-	std::vector<std::shared_ptr<AbsFormatterItem>> temp_items;
+	static auto get_event_func = [](char c) -> Event {
+		switch (c) {
+		case '%':
+			return Event::kPercent;
+		case 'd':
+			return Event::kAlphaD;
+		case '{':
+			return Event::kBrace;
+		case '}':
+			return Event::kBackBrace;
+		default:
+			return Event::kOther;
+		}
+	};
 
-	State state = State::kText;
+	// 状态转移表 - [state][event]
+	static State transform_table[(size_t)State::kInvalid + 1][(size_t)Event::kOther + 1] {
+		{State::kSinglePercent, State::kTextBegin, State::kTextBegin, State::kTextBegin, State::kTextBegin},	// Start
+		{State::kPercentAfterText, State::kTextKeep, State::kTextKeep, State::kTextKeep, State::kTextKeep},		// TextBegin
+		{State::kPercentAfterText, State::kTextKeep, State::kTextKeep, State::kTextKeep, State::kTextKeep},		// TextKeep
+		{State::kDoublePercent, State::kWaitBrace, State::kInvalid, State::kInvalid, State::kTryAddItem},		// PercentAfterText
+		{State::kDoublePercent, State::kWaitBrace, State::kInvalid, State::kInvalid, State::kTryAddItem},		// SinglePercent
+		{State::kSinglePercent, State::kTextBegin, State::kTextBegin, State::kTextBegin, State::kTextBegin},// TryAddItem
+		{State::kSinglePercent, State::kTextBegin, State::kTextBegin, State::kTextBegin, State::kTextBegin},// DoublePercent
+		{State::kInvalid, State::kInvalid, State::kTimeFormatBegin, State::kInvalid, State::kInvalid},				// WaitBrace
+		{State::kTimeFormatKeep, State::kTimeFormatKeep, State::kTimeFormatKeep, State::kTimeFormatEnd, State::kTimeFormatKeep},// TimeFormatBegin
+		{State::kTimeFormatKeep, State::kTimeFormatKeep, State::kTimeFormatKeep, State::kTimeFormatEnd, State::kTimeFormatKeep},// TimeFormatKeep
+		{State::kSinglePercent, State::kTextBegin, State::kTextBegin, State::kTextBegin, State::kTextBegin},// TimeFormatEnd
+		{State::kInvalid, State::kInvalid, State::kInvalid, State::kInvalid, State::kInvalid}					// Invalid
+	};
+
+	State state = State::kStart;
+	std::pair<size_t, size_t> range {0, 0};	// [begin, end)
 	for (size_t i = 0; i < pattern_.size(); ++i) {
-		char ch = pattern_[i];
+		state = transform_table[(size_t)state][(size_t)get_event_func(pattern_[i])];
 
-		switch (state)
-		{
-		case State::kText:
-			if (ch == '%') {
-				state = State::kPercent;
-			} else if (ch == '{') {
-				state = State::kBrace;
-			} else {
-				// get complete raw string
-				size_t end = i + 1;	// range: [i, end)
-				while (end < pattern_.size() && pattern_[end] != '%' && pattern_[end] != '{') {
-					end++;
-				}
-
-				// create a RawStrFormatterItem instance
-				std::string raw_str = pattern_.substr(i, end - i);
-				temp_items.emplace_back(new RawStrFormatterItem(std::move(raw_str)));
-
-				// update index and continue
-				i = end - 1;
-				continue;
-			}
-			break;
-		case State::kPercent:
-			if (ch == 'd') {
-				if (i + 1 < pattern_.size() && pattern_[i + 1] == '{') {
-					i += 1;
-					state = State::kBrace;
-				} else {
-					std::cerr << "Invalid datetime pattern: " << pattern_;
-					available_ = false;
-					return;
-				}
-			} else {
-				auto it = ls_formatter_item_set.find(ch);
-				if (it != ls_formatter_item_set.end()) {
-					temp_items.push_back(it->second);
-				} else {
-					std::cerr << "Unexpected character '"<< ch << "', ignore it." << std::endl;
-				}
-				state = State::kText;
-			}
-			break;
-		case State::kBrace:
-			// get complete datetime format
-			size_t end = i + 1;	// range: [i, end)
-			while (end < pattern_.size() && pattern_[end] != '}') {
-				end++;
-			}
-
-			if (end >= pattern_.size()) {
-				// 没有解析到 '}'
-				std::cerr << "Invalid datetime pattern: " << pattern_;
-				available_ = false;
-				return;
-			}
-
-			// create a DateTimeFormatterItem instance
-			std::string datetime_str = pattern_.substr(i, end - i);
-			temp_items.emplace_back(new DateTimeFormatterItem(std::move(datetime_str)));
-
-			// update index and continue
-			i = end;	// skip '}'
-			state = State::kText;
+		switch (state) {
+		case State::kStart:
+		case State::kTextKeep:
+		case State::kSinglePercent:
+		case State::kWaitBrace:
+		case State::kTimeFormatKeep:
 			continue;
+		case State::kTextBegin:
+		case State::kTimeFormatBegin:
+			range.first = i;
+			break;
+		case State::kPercentAfterText:
+			range.second = i;
+			HandlePercentAfterTextState(range.first, range.second);
+			range = {0, 0};
+			break;
+		case State::kTryAddItem:
+			HandleTryAddItemState(pattern_[i]);
+			break;
+		case State::kDoublePercent:
+			HandleDoublePercentState();
+			break;
+		case State::kTimeFormatEnd:
+			range.second = i;
+			HandleTimeFormatEndState(range.first, range.second);
+			range = {0, 0};
+			break;
+		case State::kInvalid:
+			throw std::invalid_argument("invalid log formatter pattern");
 		}
 	}
+}
 
-	items_.swap(temp_items);
+static std::unordered_map<char, std::shared_ptr<LogFormatter::AbsFormatterItem>> s_formatter_item_set {
+	{'m', std::make_shared<MsgFormatterItem>()},
+	{'c', std::make_shared<LoggerNameFormatterItem>()},
+	{'L', std::make_shared<logLevelFormatterItem>()},
+	{'l', std::make_shared<LineNumFormatterItem>()},
+	{'t', std::make_shared<TabFormatterItem>()},
+	{'n', std::make_shared<NewLineFormatterItem>()},
+	{'f', std::make_shared<FileNameFormatterItem>()},
+	{'T', std::make_shared<ThreadIdFormatterItem>()},
+	{'R', std::make_shared<RoutineIdFormatterItem>()},
+	{'%', std::make_shared<TextFormatterItem>("%")},
+};
+
+void LogFormatter::HandleDoublePercentState() {
+	items_.push_back(s_formatter_item_set['%']);
+}
+
+void LogFormatter::HandlePercentAfterTextState(size_t begin, size_t end) {
+	std::string text = pattern_.substr(begin, end - begin);
+	items_.emplace_back(std::make_shared<TextFormatterItem>(std::move(text)));
+}
+
+void LogFormatter::HandleTryAddItemState(char c) {
+	items_.push_back(s_formatter_item_set[c]);
+}
+
+void sylar::LogFormatter::HandleTimeFormatEndState(size_t begin, size_t end) {
+	std::string time_format = pattern_.substr(begin + 1, end - begin - 1);
+	items_.emplace_back(std::make_shared<DateTimeFormatterItem>(std::move(time_format)));
 }
 
 std::string LogFormatter::Format(const std::shared_ptr<LogEvent>& event) const {
@@ -327,15 +363,22 @@ StreamLogAppender::StreamLogAppender(std::ostream& out_stream)
 
 void StreamLogAppender::Log(const std::shared_ptr<LogEvent>& event) const {
 	assert(event && formatter_);
-	targetOutStream_ << formatter_->Format(event);
+
+	this->targetOutStream_ << formatter_->Format(event);
 }
 
 Logger::Logger(std::string name)
-	: name_(name)
+	: name_(std::move(name))
 	{}
 
 void Logger::Log(const std::shared_ptr<LogEvent>& event) const {
 	if (event->level >= level_) {
+		if (appenderArray_.empty()) {
+			assert(parent_);
+			parent_->Log(event);
+			return;
+		}
+
 		for (const auto& appender : appenderArray_) {
 			appender->Log(event);
 		}
@@ -347,51 +390,57 @@ void Logger::Log(const std::shared_ptr<LogEvent>& event) const {
  * @param appender
  * @todo 考虑线程安全
  */
-void Logger::AddAppender(std::shared_ptr<const LogAppender> appender) {
+void Logger::AddAppender(std::shared_ptr<LogAppender> appender) {
+	if (!appender->HasSpecialFormatter()) {
+		appender->SetFormatter(this->GetFormatter());
+	}
 	appenderArray_.push_back(std::move(appender));
 }
 
+void Logger::SetFormatter(const std::shared_ptr<LogFormatter>& formatter) {
+	if (formatter_ == formatter) {
+		return;
+	}
+
+	formatter_ = formatter;
+
+	for (auto& appender : appenderArray_) {
+		if (appender->HasSpecialFormatter() == false) {
+			appender->formatter_ = formatter;
+		}
+	}
+}
+
 LoggerManager::LoggerManager()
-	: defaultLogger_(std::make_shared<Logger>())
+	: rootLogger_(std::shared_ptr<Logger>(new Logger(SYLAR_ROOT_LOGGER_NAME)))
 	, loggers_()
 {
-	auto default_appender = std::make_shared<StreamLogAppender>(std::cout);
-	auto std_out_formatter = std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m%n");
-	default_appender->SetFormatter(std_out_formatter);
-	defaultLogger_->AddAppender(default_appender);
+	rootLogger_->SetFormatter(std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m%n"));
+	rootLogger_->AddAppender(std::make_shared<StreamLogAppender>(std::cout));
 
-	loggers_[defaultLogger_->GetName()] = defaultLogger_;
-
-	auto init_loggers = [&default_appender](const std::vector<std::shared_ptr<Logger>>& loggers) {
-		for (const auto& logger_ptr : loggers) {
-			logger_ptr->AddAppender(default_appender);
-		}
-	};
-
-	init(std::move(init_loggers));
+	loggers_[rootLogger_->GetName()] = rootLogger_;
 }
 
-std::shared_ptr<Logger> LoggerManager::GetLogger(std::string name) const {
-	auto it = loggers_.find(std::move(name));
-	if (it == loggers_.end()) {
-		SYLAR_LOG_WARN(SYLAR_DEF_LOGGER()) << "Has not logger named '" << name << "', returns the default logger.";
-		return defaultLogger_;
-	}
-
-	return it->second;
-}
-
-void LoggerManager::AddLogger(std::shared_ptr<Logger> newer, std::shared_ptr<Logger>* older) {
-	const std::string& name = newer->GetName();
+std::shared_ptr<Logger> LoggerManager::GetLogger(const std::string& name) {
 	auto it = loggers_.find(name);
-	if (it != loggers_.end() && older) {
-		*older = loggers_[name];
+	if (it != loggers_.end()) {
+		return it->second;
 	}
-	loggers_[name] = newer;
+
+	return InitLoggerAndAppend(name);
 }
 
-void LoggerManager::init(std::function<void(const std::vector<std::shared_ptr<Logger>>& appenders)> func) {
-	auto system_logger = std::make_shared<Logger>("System");
-	func({system_logger});
-	AddLogger(std::move(system_logger));
+std::shared_ptr<Logger> LoggerManager::InitLoggerAndAppend(const std::string& name) {
+	assert(loggers_.count(name) == 0);
+
+	// creates and initializes
+	auto new_logger = std::shared_ptr<Logger>(new Logger(SYLAR_ROOT_LOGGER_NAME));
+	new_logger->SetParent(rootLogger_);
+	new_logger->SetFormatter(rootLogger_->GetFormatter());
+
+	// appends
+	loggers_[name] = new_logger;
+
+	return new_logger;
 }
+
