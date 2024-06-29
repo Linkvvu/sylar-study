@@ -10,7 +10,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-option(ENABLE_TEST "enable all tests" OFF)
+option(ENABLE_TEST "enable all tests" ON)
 
 message(STATUS "CMake_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 message(STATUS "CMake current system name: ${CMAKE_SYSTEM_NAME}")

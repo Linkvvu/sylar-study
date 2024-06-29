@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cassert>
 #include <sstream>
+#include <fstream>
 #include <functional>
 #include <unordered_map>
 
@@ -96,6 +97,7 @@ namespace sylar {
 		};
 
 		static std::string ToString(Level l);
+		static LogLevel::Level FromString(const std::string& str);
 	};
 
 
@@ -152,15 +154,16 @@ namespace sylar {
 		};
 
 	private:
-		void init();
+		void Init();
 		void HandleDoublePercentState();
 		void HandlePercentAfterTextState(size_t begin, size_t end);
-		void HandleTryAddItemState(char c);
+		void HandleEndingWithText(size_t begin);
+		bool HandleTryAddItemState(char c);
 		void HandleTimeFormatEndState(size_t begin, size_t end);
+
 	private:
 		const std::string pattern_;
 		std::vector<std::shared_ptr<AbsFormatterItem>> items_;
-		bool available_ = true;
 	};
 
 
@@ -189,6 +192,9 @@ namespace sylar {
 
 		void AddAppender(std::shared_ptr<LogAppender> appender);
 
+		void ClearAllAppender()
+		{ appenderArray_.clear(); }
+
 		const std::shared_ptr<LogFormatter>& GetFormatter() const
 		{ return formatter_; }
 
@@ -201,10 +207,11 @@ namespace sylar {
 			// avoids cyclic dependence
 			assert(parent.get() != this);
 			assert(parent->GetParent().get() != this);
-
-			// use std::swap -> avoid self assignment
-			std::swap(parent, parent_);
+			parent_ = std::move(parent);
 		}
+
+		void SetLogLevel(LogLevel::Level l)
+		{ level_ = l; }
 
 		const std::string& GetName() const
 		{ return name_; }
@@ -235,11 +242,16 @@ namespace sylar {
 		bool HasSpecialFormatter() const
 		{ return hasSpecialFormatter; }
 
+		void SetLogLevel(LogLevel::Level l)
+		{ level_ = l; }
+
+		LogLevel::Level GetLogLevel() const
+		{ return level_; }
+
 		virtual ~LogAppender() noexcept = default;
 
 	protected:
-		/// TODO:
-		///		level filed
+		LogLevel::Level level_;
 		bool hasSpecialFormatter = false;
 		std::shared_ptr<LogFormatter> formatter_;
 	};
@@ -256,7 +268,15 @@ namespace sylar {
 		std::ostream& targetOutStream_;
 	};
 
+	class FileStreamLogAppender : public StreamLogAppender {
+	public:
+		explicit FileStreamLogAppender(std::string filename);
+		virtual ~FileStreamLogAppender() noexcept override;
 
+	private:
+		std::string filename_;
+		std::ofstream ofs_;
+	};
 
 	class LoggerManager {
 		explicit LoggerManager();
@@ -273,6 +293,7 @@ namespace sylar {
 		 * @return std::shared_ptr<Logger>  返回目标Logger示例，若目标Logger不存在，则创建实例并返回
 		 */
 		std::shared_ptr<Logger> GetLogger(const std::string& name);
+		void RemoveLogger(const std::string& name);
 
 	private:
 		std::shared_ptr<Logger> InitLoggerAndAppend(const std::string& name);

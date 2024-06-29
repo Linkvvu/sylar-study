@@ -31,14 +31,14 @@ static void ListAllNode(const YAML::Node& root, std::vector<std::pair<const std:
 	}
 }
 
-void sylar::Config::LoadFromFile(const char* path) {
+void sylar::ConfigManager::LoadFromFile(const char* path) {
 	YAML::Node doc_root = YAML::LoadFile(path);
 	std::vector<std::pair<const std::string, const YAML::Node>> node_set;
 
 	try {
 		ListAllNode(doc_root, node_set);
 	} catch (const std::exception& e) {
-		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "Config::LoadFromFile exception: %s; filename=%s", e.what(), path);
+		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "ConfigManager::LoadFromFile exception: %s; filename=%s", e.what(), path);
 		return;
 	}
 
@@ -56,7 +56,7 @@ void sylar::Config::LoadFromFile(const char* path) {
 	}
 }
 
-std::shared_ptr<AbsConfigVar> Config::FindConfigVarBase(const std::string& name) const {
+std::shared_ptr<AbsConfigVar> ConfigManager::FindConfigVarBase(const std::string& name) const {
 	auto it = configs_.find(name);
 	return it == configs_.end() ? nullptr : it->second;
 }

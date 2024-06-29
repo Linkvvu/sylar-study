@@ -5,7 +5,7 @@
 class ConfigEnv : public testing::Test {
 public:
 	explicit ConfigEnv()
-		: config_(sylar::Singleton<sylar::Config>::GetInstance())
+		: config_(sylar::Singleton<sylar::ConfigManager>::GetInstance())
 		{}
 
 	virtual void SetUp() override {
@@ -19,7 +19,7 @@ public:
 	}
 
 protected:
-	sylar::Config& config_;
+	sylar::ConfigManager& config_;
 };
 
 TEST(BasicLexicalCast, IntTest) {
@@ -36,8 +36,15 @@ TEST(StlLexicalCast, VectorTest) {
 	ASSERT_EQ(vec_int_config_var.ToString(), "- 1000\n- -1000\n- 9999999");
 }
 
+TEST(LoadLoggerConfig, Basic) {
+	sylar::Singleton<sylar::ConfigManager>::GetInstance()
+		.LoadFromFile("/home/wuhao/projs/sylar-study/conf/loggers.yaml");
+	SYLAR_LOG_DEBUG(SYLAR_GET_LOGGER("std_out_logger")) << "Test for the strand output stream Logger" << std::endl;
+	SYLAR_LOG_INFO(SYLAR_GET_LOGGER("file_logger")) << "Test for the file Logger" << std::endl;
+}
+
 TEST_F(ConfigEnv, LoadConfigsFromFile) {
-	config_.LoadFromFile("/home/wuhao/projs/sylar-study/sylar/test/config.yml");
+	config_.LoadFromFile("/home/wuhao/projs/sylar-study/conf/config.yml");
 	EXPECT_EQ(config_.Find<std::string>("person.name")->GetValue(), "CXX");
 	EXPECT_EQ(config_.Find<int>("person.age")->GetValue(), 22);
 	EXPECT_THAT(config_.Find<std::vector<std::string>>("person.email")->GetValue(),

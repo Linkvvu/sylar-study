@@ -7,6 +7,7 @@
 #include <regex>
 #include <string>
 #include <exception>
+#include <functional>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -291,6 +292,15 @@ namespace sylar {
 							typename ToStrFunctor = LexicalCast<T, std::string, YamlTag>>
 	class ConfigVar : public AbsConfigVar {
 	public:
+		using Monitor = std::function<void(T& old, T& now)>;
+
+		std::vector<Monitor> GetAllMonitor() const;
+
+		uint64_t AddMonitor(Monitor m);
+
+		void RemoveMonitor(uint64_t monitor_id)
+		{ monitors_.erase(monitor_id); }
+
 		explicit ConfigVar(std::string name, const T& def_val, std::string desc = std::string());
 
 		~ConfigVar() noexcept = default;
@@ -306,17 +316,18 @@ namespace sylar {
 
 	private:
 		T val_;
+		std::map<uint64_t, Monitor> monitors_;
 	};
 
 
 	/**
 	 * @brief 单例配置管理类
 	 */
-	class Config {
-		friend sylar::Singleton<Config>;
-		Config() = default;
-		Config(const Config&) = delete;
-		Config& operator=(const Config&) = delete;
+	class ConfigManager {
+		friend sylar::Singleton<ConfigManager>;
+		ConfigManager() = default;
+		ConfigManager(const ConfigManager&) = delete;
+		ConfigManager& operator=(const ConfigManager&) = delete;
 
 	public:
 		void LoadFromFile(const char* path);
@@ -351,6 +362,26 @@ namespace sylar {
 
 } // namespace sylar
 
+template<typename T, typename FromStrFunctor, typename ToStrFunctor>
+std::vector<typename sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::Monitor>
+sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::GetAllMonitor() const {
+    std::vector<Monitor> result;
+	std::transform(monitors_.begin(), monitors_.end(),
+		std::back_inserter(result),
+		[](const std::pair<uint64_t, Monitor>& pair) {
+			return pair.second;
+		}
+	);
+	return result;
+}
+
+template<typename T, typename FromStrFunctor, typename ToStrFunctor>
+uint64_t sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::AddMonitor(Monitor m) {
+	static uint16_t next_id = 0;
+	monitors_[next_id] = std::move(m);
+    return next_id++;
+}
+
 template <typename T, typename FromStrFunctor, typename ToStrFunctor>
 sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::ConfigVar(std::string name, const T& def_val, std::string desc)
 	: AbsConfigVar(std::move(name), std::move(desc))
@@ -363,7 +394,13 @@ void sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::SetVal(const T& val) {
 		return;
 	}
 
+	T old = std::move(val_);
 	val_ = val;
+
+	const std::vector<Monitor>& monitors = GetAllMonitor();
+	for (const auto& monitor : monitors) {
+		monitor(old, val_);
+	}
 }
 
 template <typename T, typename FromStrFunctor, typename ToStrFunctor>
@@ -401,12 +438,12 @@ std::string sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::ToString() const 
 }
 
 template <typename T>
-std::shared_ptr<sylar::ConfigVar<T>> sylar::Config::Find(const std::string& name) const {
+std::shared_ptr<sylar::ConfigVar<T>> sylar::ConfigManager::Find(const std::string& name) const {
 	auto it = configs_.find(name);
 	if (it != configs_.end()) {
 		auto target = std::dynamic_pointer_cast<ConfigVar<T>>(it->second);
 		if (!target) {
-			SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "Config::Find config name=" << name << ", exist but can not convert to "
+			SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "ConfigManager::Find config name=" << name << ", exist but can not convert to "
 											<< "type: " << typeid(T).name();
 			return nullptr;
 		}
@@ -416,15 +453,15 @@ std::shared_ptr<sylar::ConfigVar<T>> sylar::Config::Find(const std::string& name
 }
 
 template<typename T>
-std::shared_ptr<sylar::ConfigVar<T>> sylar::Config::AddOrUpdate(const std::string& name, const T& def_val, const std::string& desc) {
+std::shared_ptr<sylar::ConfigVar<T>> sylar::ConfigManager::AddOrUpdate(const std::string& name, const T& def_val, const std::string& desc) {
 	if (!AbsConfigVar::IsValidName(name)) {
-		SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "Config::AddOrUpdate invalid config name=" << name;
+		SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "ConfigManager::AddOrUpdate invalid config name=" << name;
 		return nullptr;
 	}
 
 	auto it = configs_.find(name);
 	if (it != configs_.end()) {
-		SYLAR_LOG_INFO(SYLAR_SYS_LOGGER()) << "Config::AddOrUpdate do update, config name= " << name;
+		SYLAR_LOG_INFO(SYLAR_SYS_LOGGER()) << "ConfigManager::AddOrUpdate do update, config name= " << name;
 	}
 	auto new_instance = std::make_shared<sylar::ConfigVar<T>>(name, def_val, desc);
 	configs_[name] = new_instance;

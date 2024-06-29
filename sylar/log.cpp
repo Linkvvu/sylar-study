@@ -1,11 +1,12 @@
 #include "log.h"
+#include "config.h"
 
 #include <cstdarg>
 #include <cstring>
 #include <cassert>
 #include <iomanip>
 #include <iostream>
-
+#include <unordered_set>
 #if defined(__unix__)
 	#include <time.h>
 #endif
@@ -26,6 +27,22 @@ std::string LogLevel::ToString(Level l) {
 		return "FATAL";
 	default:
 		return "UNKNOWN";
+	}
+}
+
+LogLevel::Level LogLevel::FromString(const std::string& str) {
+	if (str == "DEBUG") {
+		return Level::kDebug;
+	} else if (str == "INFO") {
+		return Level::kInfo;
+	} else if (str == "WARN") {
+		return Level::kWarn;
+	} else if (str == "ERROR") {
+		return Level::kError;
+	} else if (str == "FATAL") {
+		return Level::kFatal;
+	} else {
+		return Level::kUnKnown;
 	}
 }
 
@@ -221,10 +238,10 @@ void LogAppender::SetFormatter(std::shared_ptr<LogFormatter> formatter) {
 LogFormatter::LogFormatter(std::string pattern)
 	: pattern_(pattern)
 {
-	init();
+	Init();
 }
 
-void LogFormatter::init() {
+void LogFormatter::Init() {
 	enum class Event : size_t {
 		kPercent,	// %
 		kAlphaD,	// d
@@ -279,12 +296,12 @@ void LogFormatter::init() {
 		{State::kInvalid, State::kInvalid, State::kInvalid, State::kInvalid, State::kInvalid}					// Invalid
 	};
 
-	State state = State::kStart;
+	State current_state = State::kStart;
 	std::pair<size_t, size_t> range {0, 0};	// [begin, end)
 	for (size_t i = 0; i < pattern_.size(); ++i) {
-		state = transform_table[(size_t)state][(size_t)get_event_func(pattern_[i])];
+		current_state = transform_table[(size_t)current_state][(size_t)get_event_func(pattern_[i])];
 
-		switch (state) {
+		switch (current_state) {
 		case State::kStart:
 		case State::kTextKeep:
 		case State::kSinglePercent:
@@ -301,7 +318,16 @@ void LogFormatter::init() {
 			range = {0, 0};
 			break;
 		case State::kTryAddItem:
-			HandleTryAddItemState(pattern_[i]);
+			if (!HandleTryAddItemState(pattern_[i])) {
+				/// FIXME:
+				/// 	使用异常代替错误日志，在LogFormatter构造函数调用端接收异常，
+				///     并记录详细的、带有上下文的错误日志
+				SYLAR_LOG_FMT_ERROR(
+					SYLAR_ROOT_LOGGER(),
+					"invalid FormatterItem id [%%%c] when initialize Formatter, ignore it",
+					pattern_[i]
+				);
+			}
 			break;
 		case State::kDoublePercent:
 			HandleDoublePercentState();
@@ -314,6 +340,17 @@ void LogFormatter::init() {
 		case State::kInvalid:
 			throw std::invalid_argument("invalid log formatter pattern");
 		}
+	}
+
+	if (current_state == State::kTextBegin || current_state == State::kTextKeep) {
+		HandleEndingWithText(range.first);
+	} else if (current_state == State::kPercentAfterText
+		|| current_state == State::kSinglePercent
+		|| current_state == State::kWaitBrace
+		|| current_state == State::kTimeFormatBegin
+		|| current_state == State::kTimeFormatKeep)
+	{
+		throw std::invalid_argument("invalid log formatter pattern");
 	}
 }
 
@@ -339,8 +376,18 @@ void LogFormatter::HandlePercentAfterTextState(size_t begin, size_t end) {
 	items_.emplace_back(std::make_shared<TextFormatterItem>(std::move(text)));
 }
 
-void LogFormatter::HandleTryAddItemState(char c) {
-	items_.push_back(s_formatter_item_set[c]);
+void LogFormatter::HandleEndingWithText(size_t begin) {
+	std::string text = pattern_.substr(begin);
+	items_.emplace_back(std::make_shared<TextFormatterItem>(std::move(text)));
+}
+
+bool LogFormatter::HandleTryAddItemState(char c) {
+	auto target_it = s_formatter_item_set.find(c);
+	if (target_it != s_formatter_item_set.end()) {
+		items_.push_back(target_it->second);
+		return true;
+	}
+	return false;
 }
 
 void sylar::LogFormatter::HandleTimeFormatEndState(size_t begin, size_t end) {
@@ -364,7 +411,9 @@ StreamLogAppender::StreamLogAppender(std::ostream& out_stream)
 void StreamLogAppender::Log(const std::shared_ptr<LogEvent>& event) const {
 	assert(event && formatter_);
 
-	this->targetOutStream_ << formatter_->Format(event);
+	if (event->level >= this->level_) {
+		this->targetOutStream_ << formatter_->Format(event);
+	}
 }
 
 Logger::Logger(std::string name)
@@ -430,11 +479,15 @@ std::shared_ptr<Logger> LoggerManager::GetLogger(const std::string& name) {
 	return InitLoggerAndAppend(name);
 }
 
+void LoggerManager::RemoveLogger(const std::string& name) {
+	loggers_.erase(name);
+}
+
 std::shared_ptr<Logger> LoggerManager::InitLoggerAndAppend(const std::string& name) {
 	assert(loggers_.count(name) == 0);
 
 	// creates and initializes
-	auto new_logger = std::shared_ptr<Logger>(new Logger(SYLAR_ROOT_LOGGER_NAME));
+	auto new_logger = std::shared_ptr<Logger>(new Logger(name));
 	new_logger->SetParent(rootLogger_);
 	new_logger->SetFormatter(rootLogger_->GetFormatter());
 
@@ -444,3 +497,324 @@ std::shared_ptr<Logger> LoggerManager::InitLoggerAndAppend(const std::string& na
 	return new_logger;
 }
 
+
+// ----------------------------------------------------------------------------------------------------
+// Log config defines(helpers)
+
+struct LogAppenderDefine {
+	constexpr static const char* kLevelConfField = "level";
+	constexpr static const char* kFormatPatternConfField = "format_pattern";
+	constexpr static const char* kTypeConfField = "type";
+	constexpr static const char* kMetaConfField = "meta";
+	constexpr static const char* kConsoleTypeConfFieldVal = "console";
+	constexpr static const char* kFileTypeConfFieldVal = "file";
+	constexpr static const char* kStdOutConfFieldVal = "out";
+	constexpr static const char* kStdErrConfFieldVal = "error";
+
+	std::shared_ptr<LogAppender> GenerateInstance() const;
+
+	bool operator==(const LogAppenderDefine& another) const {
+		return level == another.level
+			&& format_pattern == another.format_pattern
+			&& type == another.type
+			&& meta == another.meta;
+	}
+
+	LogLevel::Level level;
+	std::string format_pattern;
+	std::string type;
+	/// @brief meta info for related type
+	/// @todo 将meta结构化，而不仅限于字符串，如当type值为file时，
+	///		  meta不仅用于存储文件路径，而且可以存储文件打开标志
+	std::string meta;
+};
+
+struct LoggerConfDefine {
+	constexpr static const char* kNameConfField = "name";
+	constexpr static const char* kLevelConfField = "level";
+	constexpr static const char* kFormatPatternConfField = "format_pattern";
+	constexpr static const char* kAppendersConfField = "appenders";
+
+	bool operator==(const LoggerConfDefine& another) const {
+		return name == another.name
+			&& level == another.level
+			&& format_pattern == another.format_pattern
+			&& appender_defs == another.appender_defs;
+	}
+
+	bool operator!=(const LoggerConfDefine& another) const {
+		return !this->operator==(another);
+	}
+
+	std::shared_ptr<Logger> GenerateInstance() const;
+
+	std::string name;
+	LogLevel::Level level;
+	std::string format_pattern;
+	std::vector<LogAppenderDefine> appender_defs;
+};
+
+namespace std {
+
+template <>
+struct hash<LoggerConfDefine> {
+	std::size_t operator()(const LoggerConfDefine& logger_define) const {
+		return ((std::hash<std::string>()(logger_define.name)
+			^ std::hash<int>()(logger_define.level))
+			& std::hash<std::string>()(logger_define.format_pattern));
+	}
+};
+
+}
+
+namespace sylar {
+
+template <>
+struct LexicalCast<std::string, LogAppenderDefine, YamlTag> {
+	LogAppenderDefine operator()(const std::string& from) {
+		LogAppenderDefine log_appender_def;
+		YAML::Node node = YAML::Load(from);
+		if (!node.IsMap()) {
+			throw std::logic_error("expect yaml document is map, but it's not");
+		}
+
+		// gets appenders's format pattern if exist
+		if (node[LogAppenderDefine::kFormatPatternConfField].IsDefined()
+			&& node[LogAppenderDefine::kFormatPatternConfField].IsScalar()
+			&& !node[LogAppenderDefine::kFormatPatternConfField].Scalar().empty())
+		{
+			log_appender_def.format_pattern = node[LogAppenderDefine::kFormatPatternConfField].Scalar();
+		} else {
+			log_appender_def.format_pattern = "";
+		}
+
+		// gets appender's level
+		log_appender_def.level =
+			node[LogAppenderDefine::kLevelConfField].IsDefined() && node[LogAppenderDefine::kLevelConfField].IsScalar()
+			? LogLevel::FromString(node[LogAppenderDefine::kLevelConfField].Scalar())
+			: LogLevel::kUnKnown;
+
+		// gets appender's type
+		if (!node[LogAppenderDefine::kTypeConfField].IsDefined()
+			|| !node[LogAppenderDefine::kTypeConfField].IsScalar()
+			|| node[LogAppenderDefine::kTypeConfField].Scalar().empty())
+		{
+			throw std::logic_error("logger config error: appender must has a valid type");
+		} else {
+			log_appender_def.type = node[LogAppenderDefine::kTypeConfField].Scalar();
+		}
+
+		// gets appender's meta info
+		if (!node[LogAppenderDefine::kMetaConfField].IsDefined()
+			|| !node[LogAppenderDefine::kMetaConfField].IsScalar()
+			|| node[LogAppenderDefine::kMetaConfField].Scalar().empty())
+		{
+			throw std::logic_error("logger config error: appender must has a valid meta info");
+		} else {
+			log_appender_def.meta = node[LogAppenderDefine::kMetaConfField].Scalar();
+		}
+
+		return log_appender_def;
+	}
+};
+
+template <>
+struct LexicalCast<std::string, LoggerConfDefine, YamlTag> {
+	LoggerConfDefine operator()(const std::string& from) {
+		LoggerConfDefine log_conf_def;
+		YAML::Node node = YAML::Load(from);
+		if (!node.IsMap()) {
+			throw std::logic_error("expect yaml document is map, but it's not");
+		}
+
+		// gets logger's name
+		if (!node[LoggerConfDefine::kNameConfField].IsDefined()
+			|| !node[LoggerConfDefine::kNameConfField].IsScalar())
+		{
+			throw std::logic_error("logger config error: logger name is null or invalid yaml document");
+		}
+		log_conf_def.name = node[LoggerConfDefine::kNameConfField].Scalar();
+
+		// gets logger's level
+		log_conf_def.level =
+			node[LoggerConfDefine::kLevelConfField].IsDefined() && node[LoggerConfDefine::kLevelConfField].IsScalar()
+			? LogLevel::FromString(node[LoggerConfDefine::kLevelConfField].Scalar())
+			: LogLevel::kUnKnown;
+
+		// gets logger's format pattern if exist
+		if (!node[LoggerConfDefine::kFormatPatternConfField].IsDefined()
+			|| !node[LoggerConfDefine::kFormatPatternConfField].IsScalar()
+			|| node[LoggerConfDefine::kFormatPatternConfField].Scalar().empty())
+		{
+			SYLAR_LOG_FMT_INFO(SYLAR_ROOT_LOGGER(),
+				"Format pattern of logger [%s] is null or invalid yaml document, "
+				"ready to use the root logger's formatter",
+				log_conf_def.name.c_str()
+			);
+			log_conf_def.format_pattern = "";
+		} else {
+			log_conf_def.format_pattern =
+				node[LoggerConfDefine::kFormatPatternConfField].Scalar();
+		}
+
+		// gets logger's appender defines if exist
+		if (node[LoggerConfDefine::kAppendersConfField].IsDefined()) {
+			std::ostringstream oss;
+			oss << node[LoggerConfDefine::kAppendersConfField];
+
+			log_conf_def.appender_defs =
+				LexicalCast<std::string, std::vector<LogAppenderDefine>, YamlTag>()(
+					oss.str()
+				);
+		}
+
+		return log_conf_def;
+	}
+};
+
+template <>
+struct LexicalCast<LogAppenderDefine, std::string, YamlTag> {
+	std::string operator()(const LogAppenderDefine& from) {
+		YAML::Node appender_node(YAML::NodeType::Map);
+		appender_node[LogAppenderDefine::kFormatPatternConfField] = from.format_pattern;
+		appender_node[LogAppenderDefine::kLevelConfField] = LogLevel::ToString(from.level);
+		std::ostringstream oss;
+		oss << appender_node;
+		return oss.str();
+	}
+};
+
+template <>
+struct LexicalCast<LoggerConfDefine, std::string, YamlTag> {
+	std::string operator()(const LoggerConfDefine& from) {
+		YAML::Node node(YAML::NodeType::Map);
+		node[LoggerConfDefine::kNameConfField] = from.name;
+		if (from.level != LogLevel::kUnKnown)
+			node[LoggerConfDefine::kLevelConfField] = LogLevel::ToString(from.level);
+		node[LoggerConfDefine::kFormatPatternConfField] = from.format_pattern;
+
+		const auto& appender_defs_doc = LexicalCast<std::vector<LogAppenderDefine>, std::string, YamlTag>()(from.appender_defs);
+		node[LoggerConfDefine::kAppendersConfField] = YAML::Load(appender_defs_doc);
+
+		std::ostringstream oss;
+		oss << node;
+		return oss.str();
+	}
+};
+
+FileStreamLogAppender::FileStreamLogAppender(std::string filename)
+	: StreamLogAppender(ofs_)
+	, filename_(std::move(filename))
+	, ofs_(filename_, std::ios::out | std::ios::ate)
+{
+	if (!ofs_.is_open()) {
+		throw std::runtime_error("failed to open file, file: \"" + filename_ + "\"");
+	}
+}
+
+FileStreamLogAppender::~FileStreamLogAppender() noexcept {
+	ofs_.close();
+}
+
+} // namespace sylar
+
+// ----------------------------------------------------------------------------------------------------
+// 初始化配置文件指定的Loggers
+
+struct InitLoggersHelper {
+	InitLoggersHelper() {
+		auto logs_conf = Singleton<ConfigManager>::GetInstance()
+				.AddOrUpdate("loggers", std::unordered_set<LoggerConfDefine>(), "loggers config");
+
+		logs_conf->AddMonitor(
+			[](std::unordered_set<LoggerConfDefine>& old, std::unordered_set<LoggerConfDefine>& now) {
+				// create or update Loggers
+				for (const auto& item : now) {
+					std::shared_ptr<Logger> logger;
+					auto it = old.find(item);
+					if (it == old.end()) {
+						item.GenerateInstance();
+					}
+				}
+
+				// remove the missing Loggers
+				/// FIXME:
+				/// 	使用更高效的方法
+				for (const auto& item : old) {
+					auto it = std::find_if(now.begin(), now.end(),
+						[&item](const LoggerConfDefine& define) {
+							return item.name == define.name;
+						}
+					);
+					if (it == now.end()) {
+						Singleton<LoggerManager>::GetInstance().RemoveLogger(item.name);
+					}
+				}
+			}
+		);
+	}
+};
+
+static InitLoggersHelper s_init_logger_helper {};
+
+std::shared_ptr<LogAppender> LogAppenderDefine::GenerateInstance() const {
+	std::shared_ptr<LogAppender> result;
+
+	// create the concrete appender
+	if (this->type == LogAppenderDefine::kConsoleTypeConfFieldVal) {
+		if (this->meta == LogAppenderDefine::kStdOutConfFieldVal) {
+			result = std::make_shared<StreamLogAppender>(std::cout);
+		} else if (this->meta == LogAppenderDefine::kStdErrConfFieldVal) {
+			result = std::make_shared<StreamLogAppender>(std::cerr);
+		}
+	} else if (this->type == LogAppenderDefine::kFileTypeConfFieldVal) {
+		try {
+			result = std::make_shared<FileStreamLogAppender>(meta);
+		} catch (const std::runtime_error& e) {
+			SYLAR_LOG_FMT_ERROR(SYLAR_ROOT_LOGGER(),
+				"catch a runtime exception when generate the file LogAppender, detail: %s",
+				e.what()
+			);
+			// result is null now
+			return result;
+		}
+	} else {
+		SYLAR_LOG_FMT_ERROR(SYLAR_ROOT_LOGGER(),
+			"logger config error: the Appender specifies a invalid type [%s], ignore it", type.c_str());
+		return result;
+	}
+
+	// init the formatter if need
+	if (!format_pattern.empty()) {
+		auto formatter = std::make_shared<LogFormatter>(format_pattern);
+		result->SetFormatter(std::move(formatter));
+	}
+
+	// init the appender's level
+	result->SetLogLevel(level);
+
+    return result;
+}
+
+std::shared_ptr<Logger> LoggerConfDefine::GenerateInstance() const {
+	assert(!name.empty());
+	auto logger = Singleton<LoggerManager>::GetInstance().GetLogger(name);
+	logger->SetLogLevel(level);
+
+	format_pattern.empty()
+		? logger->SetFormatter(SYLAR_ROOT_LOGGER()->GetFormatter())
+		: logger->SetFormatter(std::make_shared<LogFormatter>(format_pattern));
+
+	logger->ClearAllAppender();
+	for (const auto& appender_define : appender_defs) {
+		auto generated_appender = appender_define.GenerateInstance();
+		if (generated_appender) {
+			logger->AddAppender(std::move(generated_appender));
+		}
+	}
+
+	/// FIXME:
+	///		Consider to set parent for Logger by config file
+
+	return logger;
+}

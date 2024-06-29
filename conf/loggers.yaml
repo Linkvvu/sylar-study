@@ -1,0 +1,21 @@
+loggers:
+  -
+    name: std_out_logger                  # required
+    level: DEBUG                          # default: UnKnown
+    format_pattern: ""                    # option
+    appenders:                            # option
+      -
+        format_pattern: "[***] %m"  # option
+        level: DEBUG                      # default: UnKnown
+        type: console                     # required
+        meta: out                         # required
+  -
+    name: file_logger
+    level: INFO
+    format:
+    appenders:
+      -
+        format_pattern: "[&&&] %m"
+        level: INFO
+        type: file
+        meta: test.log
