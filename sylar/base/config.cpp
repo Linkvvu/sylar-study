@@ -1,8 +1,9 @@
 #include "config.h"
 
 using namespace sylar;
+using namespace sylar::base;
 
-bool sylar::AbsConfigVar::IsValidName(const std::string& name) {
+bool sylar::base::AbsConfigVar::IsValidName(const std::string& name) {
 	std::regex pattern("^[a-zA-Z0-9._]+$");
     return std::regex_match(name, pattern);
 }
@@ -16,7 +17,11 @@ AbsConfigVar::AbsConfigVar(std::string name, std::string desc)
 	}
 }
 
-static void ListAllNode(const YAML::Node& root, std::vector<std::pair<const std::string, const YAML::Node>>& node_set, const std::string& name = "") {
+static void ListAllNode(const YAML::Node& root,
+		std::vector<std::pair<const std::string,
+		const YAML::Node>>& node_set,
+		const std::string& name = "")
+{
 	if (AbsConfigVar::IsValidName(name) || name.empty()) {
 		if (!name.empty()) {
 			node_set.emplace_back(name, root);
@@ -31,7 +36,7 @@ static void ListAllNode(const YAML::Node& root, std::vector<std::pair<const std:
 	}
 }
 
-void sylar::ConfigManager::LoadFromFile(const char* path) {
+void sylar::base::ConfigManager::LoadFromFile(const char* path) {
 	YAML::Node doc_root = YAML::LoadFile(path);
 	std::vector<std::pair<const std::string, const YAML::Node>> node_set;
 
@@ -57,6 +62,8 @@ void sylar::ConfigManager::LoadFromFile(const char* path) {
 }
 
 std::shared_ptr<AbsConfigVar> ConfigManager::FindConfigVarBase(const std::string& name) const {
+	std::lock_guard<std::mutex> guard(mutex_);
+
 	auto it = configs_.find(name);
 	return it == configs_.end() ? nullptr : it->second;
 }

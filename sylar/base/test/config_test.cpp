@@ -2,10 +2,12 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+using namespace sylar;
+
 class ConfigEnv : public testing::Test {
 public:
 	explicit ConfigEnv()
-		: config_(sylar::Singleton<sylar::ConfigManager>::GetInstance())
+		: config_(base::Singleton<base::ConfigManager>::GetInstance())
 		{}
 
 	virtual void SetUp() override {
@@ -19,26 +21,26 @@ public:
 	}
 
 protected:
-	sylar::ConfigManager& config_;
+	base::ConfigManager& config_;
 };
 
 TEST(BasicLexicalCast, IntTest) {
-	sylar::ConfigVar<int> int_config_var("int", 0);
+	base::ConfigVar<int> int_config_var("int", 0);
 	ASSERT_EQ(int_config_var.ToString(), "0");
 	int_config_var.FromString("1");
 	ASSERT_EQ(int_config_var.ToString(), "1");
 }
 
 TEST(StlLexicalCast, VectorTest) {
-	sylar::ConfigVar<std::vector<int>> vec_int_config_var("vec_int", {0, 10, 100});
+	base::ConfigVar<std::vector<int>> vec_int_config_var("vec_int", {0, 10, 100});
 	ASSERT_EQ(vec_int_config_var.ToString(), "- 0\n- 10\n- 100");
 	vec_int_config_var.FromString("[1000, -1000, 9999999]");
 	ASSERT_EQ(vec_int_config_var.ToString(), "- 1000\n- -1000\n- 9999999");
 }
 
 TEST(LoadLoggerConfig, Basic) {
-	sylar::Singleton<sylar::ConfigManager>::GetInstance()
-		.LoadFromFile("/home/wuhao/projs/sylar-study/conf/loggers.yaml");
+	base::Singleton<base::ConfigManager>::GetInstance()
+		.LoadFromFile("/home/haovvu/projs/sylar-study/conf/loggers.yaml");
 	SYLAR_LOG_DEBUG(SYLAR_GET_LOGGER("std_out_logger")) << "Test for the strand output stream Logger" << std::endl;
 	SYLAR_LOG_INFO(SYLAR_GET_LOGGER("file_logger")) << "Test for the file Logger" << std::endl;
 }

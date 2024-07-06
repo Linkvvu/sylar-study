@@ -12,6 +12,7 @@
 #endif
 
 using namespace sylar;
+using namespace sylar::base;
 
 std::string LogLevel::ToString(Level l) {
     switch (l) {
@@ -54,18 +55,18 @@ std::shared_ptr<LogEvent> LogEvent::NewLogEvent(std::string msg, LogLevel::Level
 		std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
 		__LINE__,
 		__FILE__,
-		::pthread_self(),
+		sylar::base::GetTid(),
 		0,	///> TODO
 		l
 	}));
 	return new_event;
 }
 
-void sylar::LogEvent::SetMessage(std::string msg) {
+void sylar::base::LogEvent::SetMessage(std::string msg) {
 	message_stream << std::move(msg);
 }
 
-void sylar::LogEvent::SetMessage(const char* fmt, ...) {
+void sylar::base::LogEvent::SetMessage(const char* fmt, ...) {
 	va_list al;
 	va_start(al, fmt);
 
@@ -390,7 +391,7 @@ bool LogFormatter::HandleTryAddItemState(char c) {
 	return false;
 }
 
-void sylar::LogFormatter::HandleTimeFormatEndState(size_t begin, size_t end) {
+void sylar::base::LogFormatter::HandleTimeFormatEndState(size_t begin, size_t end) {
 	std::string time_format = pattern_.substr(begin + 1, end - begin - 1);
 	items_.emplace_back(std::make_shared<DateTimeFormatterItem>(std::move(time_format)));
 }
@@ -412,6 +413,8 @@ void StreamLogAppender::Log(const std::shared_ptr<LogEvent>& event) const {
 	assert(event && formatter_);
 
 	if (event->level >= this->level_) {
+		std::lock_guard<std::mutex> guard(mutex_);
+
 		this->targetOutStream_ << formatter_->Format(event);
 	}
 }
@@ -422,8 +425,22 @@ Logger::Logger(std::string name)
 
 void Logger::Log(const std::shared_ptr<LogEvent>& event) const {
 	if (event->level >= level_) {
-		if (appenderArray_.empty()) {
-			assert(parent_);
+		bool parent_do_log = false;
+		std::vector<std::shared_ptr<sylar::base::LogAppender>> duplicate;
+		{
+			std::lock_guard<std::mutex> guard(mutex_);
+
+			if (appenderArray_.empty()) {
+				assert(parent_);
+				parent_do_log = true;
+			} else {
+				// gets a duplicate of appenders to shorten the critical section
+				// cause logging is expensive
+				duplicate = appenderArray_;
+			}
+		}
+
+		if (parent_do_log) {
 			parent_->Log(event);
 			return;
 		}
@@ -446,6 +463,16 @@ void Logger::AddAppender(std::shared_ptr<LogAppender> appender) {
 	appenderArray_.push_back(std::move(appender));
 }
 
+void Logger::ClearAllAppender() {
+	std::lock_guard<std::mutex> guard(mutex_);
+	appenderArray_.clear();
+}
+
+const std::shared_ptr<LogFormatter>& Logger::GetFormatter() const {
+	std::lock_guard<std::mutex> guard(mutex_);
+    return formatter_;
+}
+
 void Logger::SetFormatter(const std::shared_ptr<LogFormatter>& formatter) {
 	if (formatter_ == formatter) {
 		return;
@@ -464,7 +491,7 @@ LoggerManager::LoggerManager()
 	: rootLogger_(std::shared_ptr<Logger>(new Logger(SYLAR_ROOT_LOGGER_NAME)))
 	, loggers_()
 {
-	rootLogger_->SetFormatter(std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m%n"));
+	rootLogger_->SetFormatter(std::make_shared<LogFormatter>("%d{%Y-%m-%d %H:%M:%S}%t%T%t%R%t[%L]%t[%c]%t%f:%l%t%m"));
 	rootLogger_->AddAppender(std::make_shared<StreamLogAppender>(std::cout));
 
 	loggers_[rootLogger_->GetName()] = rootLogger_;
@@ -568,6 +595,7 @@ struct hash<LoggerConfDefine> {
 }
 
 namespace sylar {
+namespace base {
 
 template <>
 struct LexicalCast<std::string, LogAppenderDefine, YamlTag> {
@@ -648,7 +676,7 @@ struct LexicalCast<std::string, LoggerConfDefine, YamlTag> {
 		{
 			SYLAR_LOG_FMT_INFO(SYLAR_ROOT_LOGGER(),
 				"Format pattern of logger [%s] is null or invalid yaml document, "
-				"ready to use the root logger's formatter",
+				"ready to use the root logger's formatter\n",
 				log_conf_def.name.c_str()
 			);
 			log_conf_def.format_pattern = "";
@@ -716,14 +744,15 @@ FileStreamLogAppender::~FileStreamLogAppender() noexcept {
 	ofs_.close();
 }
 
+} // namespace base
 } // namespace sylar
 
 // ----------------------------------------------------------------------------------------------------
 // 初始化配置文件指定的Loggers
 
-struct InitLoggersHelper {
-	InitLoggersHelper() {
-		auto logs_conf = Singleton<ConfigManager>::GetInstance()
+struct __InitLoggersHelper {
+	__InitLoggersHelper() {
+		auto logs_conf = base::Singleton<ConfigManager>::GetInstance()
 				.AddOrUpdate("loggers", std::unordered_set<LoggerConfDefine>(), "loggers config");
 
 		logs_conf->AddMonitor(
@@ -747,7 +776,7 @@ struct InitLoggersHelper {
 						}
 					);
 					if (it == now.end()) {
-						Singleton<LoggerManager>::GetInstance().RemoveLogger(item.name);
+						base::Singleton<LoggerManager>::GetInstance().RemoveLogger(item.name);
 					}
 				}
 			}
@@ -798,7 +827,7 @@ std::shared_ptr<LogAppender> LogAppenderDefine::GenerateInstance() const {
 
 std::shared_ptr<Logger> LoggerConfDefine::GenerateInstance() const {
 	assert(!name.empty());
-	auto logger = Singleton<LoggerManager>::GetInstance().GetLogger(name);
+	auto logger = base::Singleton<LoggerManager>::GetInstance().GetLogger(name);
 	logger->SetLogLevel(level);
 
 	format_pattern.empty()

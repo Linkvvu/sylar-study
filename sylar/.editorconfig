@@ -1,0 +1,25 @@
+# editorConfig for C++ projects
+
+root = true
+
+# UNIX format
+[*]
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# sources
+[*.cpp]
+indent_style = tab
+indent_size = 4
+
+# headers
+[*{.h, .hpp}]
+indent_style = tab
+indent_size = 4
+
+# CMake 文件
+[CMakeLists.txt]
+indent_style = space
+indent_size = 2
