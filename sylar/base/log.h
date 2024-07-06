@@ -1,6 +1,6 @@
 #pragma once
 
-#include "singleton.h"
+#include "singleton.hpp"
 #include "this_thread.h"
 
 #include <mutex>

@@ -472,16 +472,6 @@ const std::shared_ptr<LogFormatter>& Logger::GetFormatter() const {
     return formatter_;
 }
 
-void Logger::ClearAllAppender() {
-	std::lock_guard<std::mutex> guard(mutex_);
-	appenderArray_.clear();
-}
-
-const std::shared_ptr<LogFormatter>& Logger::GetFormatter() const {
-	std::lock_guard<std::mutex> guard(mutex_);
-    return formatter_;
-}
-
 void Logger::SetFormatter(const std::shared_ptr<LogFormatter>& formatter) {
 	std::lock_guard<std::mutex> guard(mutex_);
 
