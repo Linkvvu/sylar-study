@@ -16,7 +16,11 @@ AbsConfigVar::AbsConfigVar(std::string name, std::string desc)
 	}
 }
 
-static void ListAllNode(const YAML::Node& root, std::vector<std::pair<const std::string, const YAML::Node>>& node_set, const std::string& name = "") {
+static void ListAllNode(const YAML::Node& root, 
+		std::vector<std::pair<const std::string,
+		const YAML::Node>>& node_set,
+		const std::string& name = "")
+{
 	if (AbsConfigVar::IsValidName(name) || name.empty()) {
 		if (!name.empty()) {
 			node_set.emplace_back(name, root);
@@ -36,6 +40,7 @@ void sylar::ConfigManager::LoadFromFile(const char* path) {
 	std::vector<std::pair<const std::string, const YAML::Node>> node_set;
 
 	try {
+		std::lock_guard<std::mutex> guard(mutex_);
 		ListAllNode(doc_root, node_set);
 	} catch (const std::exception& e) {
 		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "ConfigManager::LoadFromFile exception: %s; filename=%s", e.what(), path);
@@ -57,6 +62,8 @@ void sylar::ConfigManager::LoadFromFile(const char* path) {
 }
 
 std::shared_ptr<AbsConfigVar> ConfigManager::FindConfigVarBase(const std::string& name) const {
+	std::lock_guard<std::mutex> guard(mutex_);
+	
 	auto it = configs_.find(name);
 	return it == configs_.end() ? nullptr : it->second;
 }
