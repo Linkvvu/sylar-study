@@ -292,21 +292,21 @@ namespace sylar {
 							typename ToStrFunctor = LexicalCast<T, std::string, YamlTag>>
 	class ConfigVar : public AbsConfigVar {
 	public:
-		using Monitor = std::function<void(T& old, T& now)>;
-
-		std::vector<Monitor> GetAllMonitor() const;
-
-		uint64_t AddMonitor(Monitor m);
-
-		void RemoveMonitor(uint64_t monitor_id)
-		{ monitors_.erase(monitor_id); }
+		using Monitor = std::function<void(const T& old, const T& now)>;
 
 		explicit ConfigVar(std::string name, const T& def_val, std::string desc = std::string());
 
 		~ConfigVar() noexcept = default;
 
+		uint64_t AddMonitor(Monitor m);
+
+		void RemoveMonitor(uint64_t monitor_id) {
+			std::lock_guard<std::mutex> guard(mutex_);
+			monitors_.erase(monitor_id);
+		}
+
 		const T& GetValue() const
-		{ return val_; }
+		{ std::lock_guard<std::mutex> guard(mutex_); return val_; }
 
 		void SetVal(const T& val);
 
@@ -315,8 +315,12 @@ namespace sylar {
 		virtual std::string ToString() const override;
 
 	private:
+		std::vector<Monitor> GetAllMonitor() const;
+
+	private:
 		T val_;
 		std::map<uint64_t, Monitor> monitors_;
+		mutable std::mutex mutex_;
 	};
 
 
@@ -358,6 +362,7 @@ namespace sylar {
 
 	private:
 		std::unordered_map<std::string, std::shared_ptr<AbsConfigVar>> configs_;
+		mutable std::mutex mutex_;
 	};
 
 } // namespace sylar
@@ -378,6 +383,8 @@ sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::GetAllMonitor() const {
 template<typename T, typename FromStrFunctor, typename ToStrFunctor>
 uint64_t sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::AddMonitor(Monitor m) {
 	static uint16_t next_id = 0;
+	std::lock_guard<std::mutex> guard(mutex_);
+
 	monitors_[next_id] = std::move(m);
     return next_id++;
 }
@@ -390,16 +397,22 @@ sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::ConfigVar(std::string name, c
 
 template <typename T, typename FromStrFunctor, typename ToStrFunctor>
 void sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::SetVal(const T& val) {
-	if (val == val_) {
-		return;
+	std::vector<Monitor> monitors;
+	T old;
+	{
+		std::lock_guard<std::mutex> guard(mutex_);
+		if (val == val_) {
+			return;
+		}
+
+		old = std::move(val_);
+		val_ = val;
+
+		monitors = GetAllMonitor();
 	}
 
-	T old = std::move(val_);
-	val_ = val;
-
-	const std::vector<Monitor>& monitors = GetAllMonitor();
 	for (const auto& monitor : monitors) {
-		monitor(old, val_);
+		monitor(old, val);
 	}
 }
 
@@ -422,8 +435,14 @@ void sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::FromString(const std::st
 template <typename T, typename FromStrFunctor, typename ToStrFunctor>
 std::string sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::ToString() const {
 	std::string res;
+	T moment_value;
+	{
+		std::lock_guard<std::mutex> guard(mutex_);
+		moment_value = val_;
+	}
+
 	try {
-		res = ToStrFunctor()(val_);
+		res = ToStrFunctor()(std::move(moment_value));
 	} catch (const boost::bad_lexical_cast& e) {
 		SYLAR_LOG_ERROR(SYLAR_SYS_LOGGER()) << "ConfigVar::ToString lexical cast exception: " << e.what()
 										<< "; config-name=" << GetName();
@@ -439,6 +458,8 @@ std::string sylar::ConfigVar<T, FromStrFunctor, ToStrFunctor>::ToString() const 
 
 template <typename T>
 std::shared_ptr<sylar::ConfigVar<T>> sylar::ConfigManager::Find(const std::string& name) const {
+	std::lock_guard<std::mutex> guard(mutex_);
+
 	auto it = configs_.find(name);
 	if (it != configs_.end()) {
 		auto target = std::dynamic_pointer_cast<ConfigVar<T>>(it->second);
@@ -459,6 +480,8 @@ std::shared_ptr<sylar::ConfigVar<T>> sylar::ConfigManager::AddOrUpdate(const std
 		return nullptr;
 	}
 
+	std::lock_guard<std::mutex> guard(mutex_);
+	
 	auto it = configs_.find(name);
 	if (it != configs_.end()) {
 		SYLAR_LOG_INFO(SYLAR_SYS_LOGGER()) << "ConfigManager::AddOrUpdate do update, config name= " << name;

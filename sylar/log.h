@@ -2,6 +2,7 @@
 
 #include "util.h"
 
+#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
@@ -140,7 +141,8 @@ namespace sylar {
 	};
 
 
-
+	/// @brief 日志格式化器
+	/// @note lock-free结构, 因为Formatter被构造完成后将不会再改变
 	class LogFormatter {
 	public:
 		explicit LogFormatter(std::string pattern);
@@ -154,6 +156,8 @@ namespace sylar {
 		};
 
 	private:
+		/// @brief 根据pattern初始化FormatterItems
+		/// @throw std::invalid_argument  无效的pattern
 		void Init();
 		void HandleDoublePercentState();
 		void HandlePercentAfterTextState(size_t begin, size_t end);
@@ -192,23 +196,16 @@ namespace sylar {
 
 		void AddAppender(std::shared_ptr<LogAppender> appender);
 
-		void ClearAllAppender()
-		{ appenderArray_.clear(); }
+		void ClearAllAppender();
 
-		const std::shared_ptr<LogFormatter>& GetFormatter() const
-		{ return formatter_; }
+		const std::shared_ptr<LogFormatter>& GetFormatter() const;
 
 		void SetFormatter(const std::shared_ptr<LogFormatter>& formatter);
 
-		const std::shared_ptr<Logger>& GetParent() const
-		{ return parent_; }
+		const std::shared_ptr<Logger>& GetParent() const;
 
-		void SetParent(std::shared_ptr<Logger> parent) {
-			// avoids cyclic dependence
-			assert(parent.get() != this);
-			assert(parent->GetParent().get() != this);
-			parent_ = std::move(parent);
-		}
+		/// @throw std::runtime_error  检测到将要发生循环引用 
+		void SetParent(std::shared_ptr<Logger> parent);
 
 		void SetLogLevel(LogLevel::Level l)
 		{ level_ = l; }
@@ -225,20 +222,25 @@ namespace sylar {
 		std::vector<std::shared_ptr<LogAppender>> appenderArray_;
 		std::shared_ptr<LogFormatter> formatter_;
 		std::shared_ptr<Logger> parent_;
+		mutable std::mutex mutex_;
 	};
 
 
-
+	/// @brief 日志追加器(thread-safe)，指定日志输出位置
 	class LogAppender {
 		friend void Logger::SetFormatter(const std::shared_ptr<LogFormatter>& formatter);
+		friend void Logger::AddAppender(std::shared_ptr<LogAppender> appender);
 	public:
 		virtual void Log(const std::shared_ptr<LogEvent>& event) const = 0;
 
 		void SetFormatter(std::shared_ptr<LogFormatter> formatter);
 
-		const std::shared_ptr<LogFormatter>& GetFormatter() const
-		{ return formatter_; }
+		const std::shared_ptr<LogFormatter>& GetFormatter() const;
 
+		/// @note 该函数没有加锁以保证flag的“最新状态”，这是可以接受的，
+		///		  因为“设置完formatter后，还未来得及更新flag就再次被
+		///		  其他线程访问的概率很小，并且formatter被覆盖相对来说
+		///		  是可以接受的”
 		bool HasSpecialFormatter() const
 		{ return hasSpecialFormatter; }
 
@@ -254,6 +256,7 @@ namespace sylar {
 		LogLevel::Level level_;
 		bool hasSpecialFormatter = false;
 		std::shared_ptr<LogFormatter> formatter_;
+		mutable std::mutex mutex_;
 	};
 
 
@@ -270,6 +273,8 @@ namespace sylar {
 
 	class FileStreamLogAppender : public StreamLogAppender {
 	public:
+
+		/// @throw std::runtime_error  打开文件失败
 		explicit FileStreamLogAppender(std::string filename);
 		virtual ~FileStreamLogAppender() noexcept override;
 
@@ -298,10 +303,10 @@ namespace sylar {
 	private:
 		std::shared_ptr<Logger> InitLoggerAndAppend(const std::string& name);
 
-
 	private:
 		std::shared_ptr<Logger> rootLogger_;
 		std::unordered_map<std::string, std::shared_ptr<Logger>> loggers_;
+		std::mutex mutex_;
 	};
 
 } // namespace sylar
