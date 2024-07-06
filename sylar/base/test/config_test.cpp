@@ -46,7 +46,7 @@ TEST(LoadLoggerConfig, Basic) {
 }
 
 TEST_F(ConfigEnv, LoadConfigsFromFile) {
-	config_.LoadFromFile("/home/wuhao/projs/sylar-study/conf/config.yml");
+	config_.LoadFromFile("/home/haovvu/projs/sylar-study/conf/config.yml");
 	EXPECT_EQ(config_.Find<std::string>("person.name")->GetValue(), "CXX");
 	EXPECT_EQ(config_.Find<int>("person.age")->GetValue(), 22);
 	EXPECT_THAT(config_.Find<std::vector<std::string>>("person.email")->GetValue(),

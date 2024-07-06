@@ -229,10 +229,14 @@ public:
 // =====================================================================================================
 
 void LogAppender::SetFormatter(std::shared_ptr<LogFormatter> formatter) {
-	using namespace std;
-	swap(this->formatter_, formatter);
+	std::lock_guard<std::mutex> guard(mutex_);
+	formatter_ = formatter;
+	hasSpecialFormatter = (this->formatter_ != nullptr);
+}
 
-	this->formatter_ ? hasSpecialFormatter = true : hasSpecialFormatter = false;
+const std::shared_ptr<LogFormatter>& LogAppender::GetFormatter() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+	return formatter_;
 }
 
 
@@ -442,23 +446,18 @@ void Logger::Log(const std::shared_ptr<LogEvent>& event) const {
 
 		if (parent_do_log) {
 			parent_->Log(event);
-			return;
-		}
-
-		for (const auto& appender : appenderArray_) {
-			appender->Log(event);
+  		} else {
+			for (const auto& appender : duplicate)
+				appender->Log(event);
 		}
 	}
 }
 
-/**
- * @brief
- * @param appender
- * @todo 考虑线程安全
- */
 void Logger::AddAppender(std::shared_ptr<LogAppender> appender) {
+	std::lock_guard<std::mutex> guard(mutex_);
 	if (!appender->HasSpecialFormatter()) {
-		appender->SetFormatter(this->GetFormatter());
+		std::lock_guard<std::mutex> guard(appender->mutex_);
+		appender->formatter_ = formatter_;
 	}
 	appenderArray_.push_back(std::move(appender));
 }
@@ -473,18 +472,49 @@ const std::shared_ptr<LogFormatter>& Logger::GetFormatter() const {
     return formatter_;
 }
 
+void Logger::ClearAllAppender() {
+	std::lock_guard<std::mutex> guard(mutex_);
+	appenderArray_.clear();
+}
+
+const std::shared_ptr<LogFormatter>& Logger::GetFormatter() const {
+	std::lock_guard<std::mutex> guard(mutex_);
+    return formatter_;
+}
+
 void Logger::SetFormatter(const std::shared_ptr<LogFormatter>& formatter) {
-	if (formatter_ == formatter) {
-		return;
-	}
+	std::lock_guard<std::mutex> guard(mutex_);
 
 	formatter_ = formatter;
 
 	for (auto& appender : appenderArray_) {
 		if (appender->HasSpecialFormatter() == false) {
+			std::lock_guard<std::mutex> guard(appender->mutex_);
 			appender->formatter_ = formatter;
+			// 设置flag为false，以避免小概率的覆盖事件，导致状态不一致
+			appender->hasSpecialFormatter = false;
 		}
 	}
+}
+
+const std::shared_ptr<Logger>& Logger::GetParent() const {
+	std::lock_guard<std::mutex> guard(mutex_);
+	return parent_;
+}
+
+
+void Logger::SetParent(std::shared_ptr<Logger> parent) {
+	// avoids cyclic dependency
+	auto current = parent;
+    while (current) {
+        if (current.get() == this) {
+            throw std::runtime_error("Cyclic dependency detected!");
+        }
+        current = current->GetParent();
+    }
+
+	std::lock_guard<std::mutex> guard(mutex_);
+	parent_ = std::move(parent);
 }
 
 LoggerManager::LoggerManager()
@@ -498,6 +528,8 @@ LoggerManager::LoggerManager()
 }
 
 std::shared_ptr<Logger> LoggerManager::GetLogger(const std::string& name) {
+	std::lock_guard<std::mutex> guard(mutex_);
+
 	auto it = loggers_.find(name);
 	if (it != loggers_.end()) {
 		return it->second;
@@ -507,6 +539,7 @@ std::shared_ptr<Logger> LoggerManager::GetLogger(const std::string& name) {
 }
 
 void LoggerManager::RemoveLogger(const std::string& name) {
+	std::lock_guard<std::mutex> guard(mutex_);
 	loggers_.erase(name);
 }
 
@@ -756,7 +789,7 @@ struct __InitLoggersHelper {
 				.AddOrUpdate("loggers", std::unordered_set<LoggerConfDefine>(), "loggers config");
 
 		logs_conf->AddMonitor(
-			[](std::unordered_set<LoggerConfDefine>& old, std::unordered_set<LoggerConfDefine>& now) {
+			[](const std::unordered_set<LoggerConfDefine>& old, const std::unordered_set<LoggerConfDefine>& now) {
 				// create or update Loggers
 				for (const auto& item : now) {
 					std::shared_ptr<Logger> logger;
@@ -784,7 +817,7 @@ struct __InitLoggersHelper {
 	}
 };
 
-static InitLoggersHelper s_init_logger_helper {};
+static __InitLoggersHelper s_init_logger_helper {};
 
 std::shared_ptr<LogAppender> LogAppenderDefine::GenerateInstance() const {
 	std::shared_ptr<LogAppender> result;

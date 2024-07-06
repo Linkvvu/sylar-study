@@ -41,6 +41,7 @@ void sylar::base::ConfigManager::LoadFromFile(const char* path) {
 	std::vector<std::pair<const std::string, const YAML::Node>> node_set;
 
 	try {
+		std::lock_guard<std::mutex> guard(mutex_);
 		ListAllNode(doc_root, node_set);
 	} catch (const std::exception& e) {
 		SYLAR_LOG_FMT_ERROR(SYLAR_SYS_LOGGER(), "ConfigManager::LoadFromFile exception: %s; filename=%s", e.what(), path);
