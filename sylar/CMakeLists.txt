@@ -32,5 +32,8 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux")
   message(STATUS "Library output DIR: ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
   message(STATUS "Archive output DIR: ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
 
+  include_directories(${CMAKE_SOURCE_DIR})
+
   add_subdirectory(${CMAKE_SOURCE_DIR}/base)
+  add_subdirectory(${CMAKE_SOURCE_DIR}/concurrency)
 endif()
