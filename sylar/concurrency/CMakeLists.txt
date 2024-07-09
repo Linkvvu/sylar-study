@@ -3,6 +3,7 @@ project(sylar_concurrency)
 set(
   SYLAR_CONCURRENCY_SRC
   coroutine.cpp
+  thread.cpp
 )
 
 source_group(${PROJECT_NAME} FILES ${SYLAR_CONCURRENCY_SRC})

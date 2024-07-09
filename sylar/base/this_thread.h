@@ -10,5 +10,5 @@ namespace base {
 
 ::pthread_t GetPthreadId();
 
-} // namespace base 
-} // namespace sylar 
+} // namespace base
+} // namespace sylar
