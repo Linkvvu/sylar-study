@@ -20,7 +20,7 @@ static void CachePthreadId() {
     }
 }
 
-} // namespace 
+} // namespace
 
 ::pid_t sylar::base::GetTid() {
     if (__builtin_expect(tl_tid == 0, 0)) {
