@@ -43,7 +43,14 @@ public:
 
 	/// FIXME: as private
 	/// @brief 获得当前线程在当前时刻正在执行或即将执行的协程
-	static std::shared_ptr<Coroutine> GetNowCoroutine();
+	static std::shared_ptr<Coroutine> GetCurCoroutine();
+
+	void Reset(std::function<void()> func);
+
+public:
+	static void YieldCurCoroutineToHold();
+
+	static void YieldCurCoroutineToReady();
 
 private:
 	/// @brief create a main coroutine for current thread
@@ -53,24 +60,21 @@ private:
 	void SetState(State s)
 	{ state_ = s; }
 
-	void ResetFunc()
-	{ func_ = nullptr; }
-
 	void DoFunc() const
 	{ func_(); }
 
 private:
 	/// @brief 设置 routine 为当前运行的协程
-	static void SetNowCoroutine(Coroutine* routine);
+	static void SetCurCoroutine(Coroutine* routine);
 
 	/// @brief 获取当前运行的协程指针
-	// static std::shared_ptr<Coroutine> GetNowCoroutine();
+	// static std::shared_ptr<Coroutine> GetCurCoroutine();
 
 	/// @brief Create a main coroutine for this thread.
 	///		   It has no effect if it was already created.
 	///
 	///		   main协程使用当前线程的栈空间，故无需为其分配栈空间
-	///		   main协程以当前线程的执行流推进，故无需为其指定回调函数
+	///		   main协程用以推进当前线程的执行流，故无需为其指定回调函数
 	static void CreateMainCoroutine();
 
 	/// @brief 协程入口函数
