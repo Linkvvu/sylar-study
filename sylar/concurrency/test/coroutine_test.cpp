@@ -7,16 +7,16 @@ static auto logger = SYLAR_ROOT_LOGGER();
 
 void co1_func() {
 	SYLAR_LOG_DEBUG(logger) << "co1 func first" << std::endl;
-	concurrency::Coroutine::GetNowCoroutine()->SwapOut();
+	concurrency::Coroutine::GetCurCoroutine()->SwapOut();
 	SYLAR_LOG_DEBUG(logger) << "co1 func second" << std::endl;
-	concurrency::Coroutine::GetNowCoroutine()->SwapOut();
+	concurrency::Coroutine::GetCurCoroutine()->SwapOut();
 	SYLAR_LOG_DEBUG(logger) << "co1 func third" << std::endl;
-	concurrency::Coroutine::GetNowCoroutine()->SwapOut();
+	concurrency::Coroutine::GetCurCoroutine()->SwapOut();
 	SYLAR_LOG_DEBUG(logger) << "co1 func here never reach" << std::endl;
 }
 
 int main() {
-	concurrency::Coroutine::GetNowCoroutine();
+	concurrency::Coroutine::GetCurCoroutine();
 
 	SYLAR_LOG_DEBUG(logger) << "main begin" << std::endl;
 	auto co1 = std::make_shared<concurrency::Coroutine>(&co1_func);

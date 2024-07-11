@@ -19,7 +19,7 @@ thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine = nullpt
 
 /// @brief 无效协程ID：0
 static std::atomic<cc::Coroutine::CoroutineId> s_coroutine_next_id = {1};
-static std::atomic<size_t> s_coroutine_count = {0};
+static std::atomic<int> s_coroutine_count = {0};
 
 } // namespace
 
@@ -29,7 +29,7 @@ static auto sylar_logger = SYLAR_ROOT_LOGGER();
 ///		使用“局部作用域、静态thread_local的实例”
 ///	@code
 /// 	thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine;
-/// @endcond
+/// @endcode
 void cc::Coroutine::CreateMainCoroutine() {
 	if (__builtin_expect(tl_p_cur_coroutine == nullptr, 0)) {
 		// create the main coroutine for this thread
@@ -39,7 +39,7 @@ void cc::Coroutine::CreateMainCoroutine() {
 		tl_sp_main_coroutine = std::move(main_coroutine);
 
 		// sets it as current coroutine for current thread
-		Coroutine::SetNowCoroutine(tl_sp_main_coroutine.get());
+		Coroutine::SetCurCoroutine(tl_sp_main_coroutine.get());
 	}
 }
 
@@ -59,7 +59,7 @@ cc::Coroutine::Coroutine()
 	///		@code tl_sp_main_coroutine.reset(this); @endcode
 
 	// updates counter
-	s_coroutine_count.store(1, std::memory_order::memory_order_relaxed);
+	s_coroutine_count.fetch_add(1, std::memory_order::memory_order_relaxed);
 	SYLAR_LOG_FMT_DEBUG(sylar_logger, "main coroutine was constructed, id=%u\n", id_);
 }
 
@@ -87,7 +87,7 @@ cc::Coroutine::Coroutine(std::function<void()> func, uint32_t stack_size)
 	::makecontext(&ctx_, &Coroutine::CoroutineFunc, 0);
 
 	// updates counter
-	s_coroutine_count.store(1, std::memory_order::memory_order_relaxed);
+	s_coroutine_count.fetch_add(1, std::memory_order::memory_order_relaxed);
 	SYLAR_LOG_FMT_DEBUG(sylar_logger, "worker coroutine was constructed, id=%u\n", id_);
 }
 
@@ -103,22 +103,22 @@ cc::Coroutine::~Coroutine() noexcept {
         SYLAR_ASSERT(func_ == nullptr);
 		SYLAR_ASSERT(GetState() == State::kExec);
 		SYLAR_ASSERT(tl_p_cur_coroutine == this);
-		Coroutine::SetNowCoroutine(nullptr);
+		Coroutine::SetCurCoroutine(nullptr);
 	}
 
 	// updates the coroutine counter
 	s_coroutine_count.fetch_sub(1, std::memory_order::memory_order_relaxed);
 
-    SYLAR_LOG_DEBUG(sylar_logger) << "Fiber::~Fiber id=" << GetId()
-			<< " total=" << s_coroutine_count << std::endl;
+    SYLAR_LOG_DEBUG(sylar_logger) << "Coroutine::~Coroutine id=" << GetId()
+			<< ", total=" << s_coroutine_count.load(std::memory_order::memory_order_relaxed) << std::endl;
 }
 
 void cc::Coroutine::SwapIn() {
 	/// TODO:
-	/// @code SYLAR_ASSERT(GetNowCoroutine() == main-coroutine) @endcode
-	SYLAR_ASSERT(Coroutine::GetNowCoroutine().get() == tl_sp_main_coroutine.get());
+	/// @code SYLAR_ASSERT(GetCurCoroutine() == main-coroutine) @endcode
+	SYLAR_ASSERT(Coroutine::GetCurCoroutine().get() == tl_sp_main_coroutine.get());
 	SYLAR_ASSERT(GetState() != State::kExec);
-	Coroutine::SetNowCoroutine(this);
+	Coroutine::SetCurCoroutine(this);
 	SetState(State::kExec);
 	if (swapcontext(&tl_sp_main_coroutine.get()->ctx_, &this->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
@@ -127,38 +127,59 @@ void cc::Coroutine::SwapIn() {
 }
 
 void cc::Coroutine::SwapOut() {
-	SYLAR_ASSERT(Coroutine::GetNowCoroutine().get() == this);
-	SYLAR_ASSERT(GetState() == State::kExec);
-	Coroutine::SetNowCoroutine(tl_sp_main_coroutine.get());
+	SYLAR_ASSERT(Coroutine::GetCurCoroutine().get() == this);
+	Coroutine::SetCurCoroutine(tl_sp_main_coroutine.get());
 	/// FIXME:
 	/// 	should update state for the instance ?
-	SetState(State::kHold);
+
+	// Its state is set by the main coroutine to which it belongs,
+	// swap out directly
 	if (swapcontext(&this->ctx_, &tl_sp_main_coroutine.get()->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
 		std::abort();
 	}
 }
 
-void cc::Coroutine::SetNowCoroutine(Coroutine* routine) {
+void cc::Coroutine::SetCurCoroutine(Coroutine* routine) {
 	tl_p_cur_coroutine = routine;
 }
 
-std::shared_ptr<cc::Coroutine> cc::Coroutine::GetNowCoroutine() {
+std::shared_ptr<cc::Coroutine> cc::Coroutine::GetCurCoroutine() {
 	SYLAR_ASSERT_WITH_MSG(tl_p_cur_coroutine != nullptr
 			, "current thread hasn't a main coroutine, create it first");
     return tl_p_cur_coroutine->shared_from_this();
 }
 
+void cc::Coroutine::Reset(std::function<void()> func) {
+	SYLAR_ASSERT(stackFrame_ && stackSize_);
+	SYLAR_ASSERT(GetState() == State::kTerminal
+			|| GetState() == State::kExcept
+			|| GetState() == State::kInit)
+	func_ = std::move(func);
+
+	ctx_ = {};
+	if (::getcontext(&ctx_)) {
+		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::getcontext, about to abort!" << std::endl;
+		std::abort();
+	}
+	ctx_.uc_stack.ss_sp = stackFrame_;
+	ctx_.uc_stack.ss_size = stackSize_;
+	::makecontext(&ctx_, &Coroutine::CoroutineFunc, 0);
+
+	state_ = State::kInit;
+}
+
 void cc::Coroutine::CoroutineFunc() {
 	// get current coroutine to run (refer count +1)
-	auto cur_coroutine = Coroutine::GetNowCoroutine();
+	auto cur_coroutine = Coroutine::GetCurCoroutine();
 	SYLAR_ASSERT(cur_coroutine != nullptr);
 	SYLAR_ASSERT(cur_coroutine->GetState() == State::kExec);
 
 	// invokes callback of current coroutine
 	try {
 		cur_coroutine->DoFunc();
-		cur_coroutine->ResetFunc();
+		cur_coroutine->func_ = nullptr;
+		cur_coroutine->SetState(State::kTerminal);
 	} catch (const std::exception& e) {
 		cur_coroutine->SetState(State::kExcept);
 		SYLAR_LOG_FMT_ERROR(sylar_logger,
@@ -174,8 +195,19 @@ void cc::Coroutine::CoroutineFunc() {
 	// release the shared_ptr our just got
 	auto cur_coroutine_raw_ptr = cur_coroutine.get();
 	cur_coroutine.reset();
+	cur_coroutine_raw_ptr->SwapOut();
+}
 
-    SYLAR_ASSERT_WITH_MSG(false, "never reach, coroutine id=" + std::to_string(cur_coroutine_raw_ptr->GetId()));
+void cc::Coroutine::YieldCurCoroutineToHold() {
+	auto cur = GetCurCoroutine();
+	SYLAR_ASSERT(cur->GetState() == State::kExec);
+	cur->SetState(State::kHold);
+	cur->SwapOut();
+}
 
-	// cur_coroutine_raw_ptr->SwapOut();
+void cc::Coroutine::YieldCurCoroutineToReady() {
+	auto cur = GetCurCoroutine();
+	SYLAR_ASSERT(cur->GetState() == State::kExec);
+	cur->SetState(State::kReady);
+	cur->SwapOut();
 }
