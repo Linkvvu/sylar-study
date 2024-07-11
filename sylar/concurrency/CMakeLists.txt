@@ -4,6 +4,7 @@ set(
   SYLAR_CONCURRENCY_SRC
   coroutine.cpp
   thread.cpp
+  scheduler.cpp
 )
 
 source_group(${PROJECT_NAME} FILES ${SYLAR_CONCURRENCY_SRC})
