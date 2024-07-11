@@ -7,7 +7,10 @@
 namespace sylar {
 namespace concurrency {
 
+class Scheduler;
+
 class Coroutine final : public std::enable_shared_from_this<Coroutine> {
+	friend Scheduler;
 public:
 	using CoroutineId = uint32_t;
 
@@ -39,7 +42,9 @@ public:
 	{ return id_; }
 
 	/// FIXME: as private
+	/// @brief 获得当前线程在当前时刻正在执行或即将执行的协程
 	static std::shared_ptr<Coroutine> GetNowCoroutine();
+
 private:
 	/// @brief create a main coroutine for current thread
 	/// @pre 这应当是当前线程第一次也是唯一一次调用
@@ -60,6 +65,13 @@ private:
 
 	/// @brief 获取当前运行的协程指针
 	// static std::shared_ptr<Coroutine> GetNowCoroutine();
+
+	/// @brief Create a main coroutine for this thread.
+	///		   It has no effect if it was already created.
+	///
+	///		   main协程使用当前线程的栈空间，故无需为其分配栈空间
+	///		   main协程以当前线程的执行流推进，故无需为其指定回调函数
+	static void CreateMainCoroutine();
 
 	/// @brief 协程入口函数
 	static void CoroutineFunc();

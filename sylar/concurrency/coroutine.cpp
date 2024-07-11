@@ -17,12 +17,31 @@ thread_local static cc::Coroutine* tl_p_cur_coroutine = nullptr;
 /// @brief 当前线程中的主协程(第一个被构造的协程)
 thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine = nullptr;
 
-static std::atomic<cc::Coroutine::CoroutineId> s_coroutine_next_id = {0};
+/// @brief 无效协程ID：0
+static std::atomic<cc::Coroutine::CoroutineId> s_coroutine_next_id = {1};
 static std::atomic<size_t> s_coroutine_count = {0};
 
 } // namespace
 
 static auto sylar_logger = SYLAR_ROOT_LOGGER();
+
+/// FIXME:
+///		使用“局部作用域、静态thread_local的实例”
+///	@code
+/// 	thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine;
+/// @endcond
+void cc::Coroutine::CreateMainCoroutine() {
+	if (__builtin_expect(tl_p_cur_coroutine == nullptr, 0)) {
+		// create the main coroutine for this thread
+		auto main_coroutine = std::shared_ptr<Coroutine>(new Coroutine);
+
+		// sets it as the main coroutine for current thread
+		tl_sp_main_coroutine = std::move(main_coroutine);
+
+		// sets it as current coroutine for current thread
+		Coroutine::SetNowCoroutine(tl_sp_main_coroutine.get());
+	}
+}
 
 cc::Coroutine::Coroutine()
 	: id_(s_coroutine_next_id.fetch_add(1, std::memory_order::memory_order_relaxed))
@@ -125,19 +144,8 @@ void cc::Coroutine::SetNowCoroutine(Coroutine* routine) {
 }
 
 std::shared_ptr<cc::Coroutine> cc::Coroutine::GetNowCoroutine() {
-	if (tl_p_cur_coroutine == nullptr) {
-		// create the main coroutine for this thread
-		auto main_coroutine = std::shared_ptr<Coroutine>(new Coroutine);
-
-		// sets it as the main coroutine for current thread
-		tl_sp_main_coroutine = std::move(main_coroutine);
-
-		// sets it as current coroutine for current thread
-		Coroutine::SetNowCoroutine(tl_sp_main_coroutine.get());
-
-		return Coroutine::GetNowCoroutine();
-	}
-
+	SYLAR_ASSERT_WITH_MSG(tl_p_cur_coroutine != nullptr
+			, "current thread hasn't a main coroutine, create it first");
     return tl_p_cur_coroutine->shared_from_this();
 }
 
