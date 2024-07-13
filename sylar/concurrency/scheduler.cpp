@@ -11,7 +11,13 @@ namespace {
 // static thread_local cc::Scheduler* tl_scheduler = nullptr;
 
 /// @brief 当前线程负责调度(任务)协程的(调度)协程对象
-static thread_local cc::Coroutine* tl_schedule_coroutine = nullptr;
+static thread_local cc::Coroutine* tl_scheduling_coroutine = nullptr;
+
+static void SetSchedulingCoroutine(cc::Coroutine* co) {
+	SYLAR_ASSERT_WITH_MSG(tl_scheduling_coroutine == nullptr && co != nullptr,
+			"current already has a scheduling coroutine");
+	tl_scheduling_coroutine = co;
+}
 
 } // namespace
 
@@ -21,14 +27,14 @@ cc::Scheduler::Scheduler(size_t thread_num, bool include_cur_thread, std::string
 			? std::make_unique<cc::Coroutine>(
 					std::bind(&Scheduler::ScheduleFunc, this), 0)
 			: nullptr)
-	, rootPthreadId_(include_cur_thread ? base::GetPthreadId() : 0)
+	, rootPthreadId_(include_cur_thread ? base::GetPthreadId() : INVALID_PTHREAD_ID)
 	, threadPool_((include_cur_thread ? thread_num - 1 : thread_num))
 	, stopped_(true)
 	, activeThreadNum_(0)
 {
 	if (include_cur_thread) {
-		cc::Coroutine::CreateMainCoroutine();
-		::tl_schedule_coroutine = rootCoroutine_.get();
+		cc::this_thread::GetMainCoroutine();
+		::SetSchedulingCoroutine(rootCoroutine_.get());
 	}
 }
 
@@ -54,41 +60,45 @@ bool cc::Scheduler::IsStopped() const {
 
 void cc::Scheduler::ScheduleFunc() {
 	// create main coroutine for current (each) thread
-	cc::Coroutine::CreateMainCoroutine();
+	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine().get();
 
-	std::shared_ptr<cc::Coroutine> idle_coroutine
-			= std::make_shared<cc::Coroutine>(std::bind(&Scheduler::HandleIdle, this));
+	// set self as the scheduling coroutine of this thread
+	::SetSchedulingCoroutine(scheduling_coroutine);
+
+	// create idle_coroutine to handle idle event
+	auto idle_coroutine = std::make_shared<cc::Coroutine>(std::bind(&Scheduler::HandleIdle, this));
+
+	// pointer to the temp coroutine, to wrap a callback be executed as a coroutine
 	std::shared_ptr<cc::Coroutine> temp_coroutine;
-	InvocableWrapper current_task {};
 
+	InvocableWrapper current_task {};
 	while (true) {
+		bool has_task = false;
 		current_task.Reset();
 		// bool need_notify = false;
 		{
 			std::lock_guard<std::mutex> guard(mutex_);
 			decltype(taskList_)::iterator it;
 			for (it = taskList_.begin(); it != taskList_.end(); ++it) {
-				if (it->target_thread != 0
+				if (it->target_thread != INVALID_PTHREAD_ID
 						&& it->target_thread != base::GetPthreadId())
 				{
 					// need_notify = true;
 					continue;
 				}
 
-				/// FIXME:
-				///		maybe assert this
-				///	@code
-				/// 	SYLAR_ASSERT(it->coroutine
-				///			&& it->coroutine->GetState() != Coroutine::State::kExec);
-				/// @endcode
 				SYLAR_ASSERT(it->coroutine || it->callback);
-
-				if (it->coroutine && it->coroutine->GetState() == Coroutine::State::kExec) {
-					continue;
-				}
-
+				/// FIXME:
+				///		concurrency::Coroutine并不满足线程安全结构，
+				///		因此一个协程对象同一时刻，只能被一个线程所执行。
+				///		pending列表类型应该由vector->set
+				/// 	以下断言并不能避免协程被多个线程执行，因为该协程
+				///     或许被其他scheduling coroutine获取，并即将执行，
+				///		只是还未改变状态
+				SYLAR_ASSERT(it->coroutine && it->coroutine->GetState() != Coroutine::State::kExec);
 				current_task = std::move(*it);
 				taskList_.erase(it);
+				has_task = true;
 				break;
 			}
 		}
@@ -107,6 +117,8 @@ void cc::Scheduler::ScheduleFunc() {
 			} else if (current_task.coroutine->GetState() != cc::Coroutine::State::kTerminal
 					&& current_task.coroutine->GetState() != cc::Coroutine::State::kExcept)
 			{
+				/// TODO:
+				/// 	协程的状态交由用户管理，对于非法状态应当报错或警告
 				current_task.coroutine->SetState(cc::Coroutine::State::kHold);
 			}
 		} else if (current_task.callback) {
@@ -123,7 +135,6 @@ void cc::Scheduler::ScheduleFunc() {
 			if (temp_coroutine->GetState() == cc::Coroutine::State::kReady) {
 				// add to list again (need a lock here, optimize it)
 				Co(std::move(temp_coroutine));
-
 			} else if (temp_coroutine->GetState() == cc::Coroutine::State::kTerminal
 					&& temp_coroutine->GetState() == cc::Coroutine::State::kExcept)
 			{
@@ -133,6 +144,10 @@ void cc::Scheduler::ScheduleFunc() {
 				temp_coroutine.reset();
 			}
 		} else {
+			if (has_task) {
+				continue;
+			}
+
 			if (idle_coroutine->GetState() == cc::Coroutine::State::kTerminal) {
 				SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "idle coroutine is terminal" << std::endl;
 				break;
@@ -154,7 +169,7 @@ void cc::Scheduler::HandleIdle() {
 	SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "Scheduler::HandleIdle is invoked" << std::endl;
 
 	while (!IsStopped()) {
-		// swap to schedule coroutine
+		// swap to the scheduling coroutine
 		cc::Coroutine::YieldCurCoroutineToHold();
 	}
 }
@@ -183,4 +198,8 @@ void cc::Scheduler::InvocableWrapper::Reset() {
 	this->target_thread = 0;
 	this->callback = nullptr;
 	this->coroutine.reset();
+}
+
+cc::Coroutine* cc::this_thread::GetSchedulingCoroutine() {
+    return tl_scheduling_coroutine;
 }

@@ -73,5 +73,11 @@ void Scheduler::AddTaskNoLock(Invocable&& func, pthread_t target_thread) {
 	taskList_.emplace_back(std::forward<Invocable>(func), target_thread);
 }
 
+namespace this_thread {
+
+/// @brief Get the scheduling coroutine for this thread
+concurrency::Coroutine* GetSchedulingCoroutine();
+
+} // namespace this_thread
 } // namespace concurrency
 } // namespace sylar

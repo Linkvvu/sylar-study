@@ -1,9 +1,9 @@
 #include <base/debug.h>
 #include <concurrency/coroutine.h>
+#include <concurrency/scheduler.h>
 
 #include <atomic>
 #include <memory>
-#include "coroutine.h"
 
 using namespace sylar;
 
@@ -14,12 +14,16 @@ namespace {
 /// @brief 当前线程中正在(即将)运行的协程
 thread_local static cc::Coroutine* tl_p_cur_coroutine = nullptr;
 
-/// @brief 当前线程中的主协程(第一个被构造的协程)
+/// @brief 当前线程中的主协程, 保存当前线程执行流的上下文
 thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine = nullptr;
 
-/// @brief 无效协程ID：0
 static std::atomic<cc::Coroutine::CoroutineId> s_coroutine_next_id = {1};
 static std::atomic<int> s_coroutine_count = {0};
+
+/// @brief 设置 routine 为当前运行的协程
+static void SetCurCoroutine(cc::Coroutine* routine) {
+	tl_p_cur_coroutine = routine;
+}
 
 } // namespace
 
@@ -30,7 +34,7 @@ static auto sylar_logger = SYLAR_ROOT_LOGGER();
 ///	@code
 /// 	thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine;
 /// @endcode
-void cc::Coroutine::CreateMainCoroutine() {
+std::shared_ptr<cc::Coroutine> cc::this_thread::GetMainCoroutine() {
 	if (__builtin_expect(tl_p_cur_coroutine == nullptr, 0)) {
 		// create the main coroutine for this thread
 		auto main_coroutine = std::shared_ptr<Coroutine>(new Coroutine);
@@ -39,8 +43,12 @@ void cc::Coroutine::CreateMainCoroutine() {
 		tl_sp_main_coroutine = std::move(main_coroutine);
 
 		// sets it as current coroutine for current thread
-		Coroutine::SetCurCoroutine(tl_sp_main_coroutine.get());
+		::SetCurCoroutine(tl_sp_main_coroutine.get());
+
+		SYLAR_LOG_FMT_DEBUG(sylar_logger, "main coroutine was constructed, id=%u\n", tl_sp_main_coroutine->GetId());
 	}
+
+	return tl_sp_main_coroutine;
 }
 
 cc::Coroutine::Coroutine()
@@ -55,12 +63,8 @@ cc::Coroutine::Coroutine()
 		std::abort();
 	}
 
-	/// FIXME:
-	///		@code tl_sp_main_coroutine.reset(this); @endcode
-
 	// updates counter
 	s_coroutine_count.fetch_add(1, std::memory_order::memory_order_relaxed);
-	SYLAR_LOG_FMT_DEBUG(sylar_logger, "main coroutine was constructed, id=%u\n", id_);
 }
 
 cc::Coroutine::Coroutine(std::function<void()> func, uint32_t stack_size)
@@ -72,6 +76,14 @@ cc::Coroutine::Coroutine(std::function<void()> func, uint32_t stack_size)
 {
 	SYLAR_ASSERT(func_ != nullptr);
 	SYLAR_ASSERT(stackFrame_ != nullptr);
+
+	if (tl_sp_main_coroutine == nullptr) {
+		SYLAR_LOG_FATAL(sylar_logger)
+				<< "current thread hasn't main coroutine, create it first please"
+				<< std::endl;
+		std::abort();
+	}
+
 	// gets context
 	if (::getcontext(&ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::getcontext, about to abort!" << std::endl;
@@ -103,7 +115,7 @@ cc::Coroutine::~Coroutine() noexcept {
         SYLAR_ASSERT(func_ == nullptr);
 		SYLAR_ASSERT(GetState() == State::kExec);
 		SYLAR_ASSERT(tl_p_cur_coroutine == this);
-		Coroutine::SetCurCoroutine(nullptr);
+		::SetCurCoroutine(nullptr);
 	}
 
 	// updates the coroutine counter
@@ -114,37 +126,31 @@ cc::Coroutine::~Coroutine() noexcept {
 }
 
 void cc::Coroutine::SwapIn() {
-	/// TODO:
-	/// @code SYLAR_ASSERT(GetCurCoroutine() == main-coroutine) @endcode
-	SYLAR_ASSERT(Coroutine::GetCurCoroutine().get() == tl_sp_main_coroutine.get());
-	SYLAR_ASSERT(GetState() != State::kExec);
-	Coroutine::SetCurCoroutine(this);
-	SetState(State::kExec);
-	if (swapcontext(&tl_sp_main_coroutine.get()->ctx_, &this->ctx_)) {
+	SYLAR_ASSERT(cc::this_thread::GetCurCoroutine().get() == cc::this_thread::GetSchedulingCoroutine());
+	SYLAR_ASSERT(this->IsRunnable());
+	::SetCurCoroutine(this);
+	this->SetState(State::kExec);
+	if (swapcontext(&cc::this_thread::GetSchedulingCoroutine()->ctx_, &this->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
 		std::abort();
 	}
 }
 
 void cc::Coroutine::SwapOut() {
-	SYLAR_ASSERT(Coroutine::GetCurCoroutine().get() == this);
-	Coroutine::SetCurCoroutine(tl_sp_main_coroutine.get());
+	SYLAR_ASSERT(cc::this_thread::GetCurCoroutine().get() == this);
+	::SetCurCoroutine(cc::this_thread::GetSchedulingCoroutine());
 	/// FIXME:
 	/// 	should update state for the instance ?
 
 	// Its state is set by the main coroutine to which it belongs,
 	// swap out directly
-	if (swapcontext(&this->ctx_, &tl_sp_main_coroutine.get()->ctx_)) {
+	if (swapcontext(&this->ctx_, &cc::this_thread::GetSchedulingCoroutine()->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
 		std::abort();
 	}
 }
 
-void cc::Coroutine::SetCurCoroutine(Coroutine* routine) {
-	tl_p_cur_coroutine = routine;
-}
-
-std::shared_ptr<cc::Coroutine> cc::Coroutine::GetCurCoroutine() {
+std::shared_ptr<cc::Coroutine> cc::this_thread::GetCurCoroutine() {
 	SYLAR_ASSERT_WITH_MSG(tl_p_cur_coroutine != nullptr
 			, "current thread hasn't a main coroutine, create it first");
     return tl_p_cur_coroutine->shared_from_this();
@@ -169,9 +175,13 @@ void cc::Coroutine::Reset(std::function<void()> func) {
 	state_ = State::kInit;
 }
 
+bool cc::Coroutine::IsRunnable() const {
+    return GetState() == State::kHold || GetState() == State::kInit || GetState() == State::kReady;
+}
+
 void cc::Coroutine::CoroutineFunc() {
 	// get current coroutine to run (refer count +1)
-	auto cur_coroutine = Coroutine::GetCurCoroutine();
+	auto cur_coroutine = cc::this_thread::GetCurCoroutine();
 	SYLAR_ASSERT(cur_coroutine != nullptr);
 	SYLAR_ASSERT(cur_coroutine->GetState() == State::kExec);
 
@@ -199,14 +209,14 @@ void cc::Coroutine::CoroutineFunc() {
 }
 
 void cc::Coroutine::YieldCurCoroutineToHold() {
-	auto cur = GetCurCoroutine();
+	auto cur = cc::this_thread::GetCurCoroutine();
 	SYLAR_ASSERT(cur->GetState() == State::kExec);
 	cur->SetState(State::kHold);
 	cur->SwapOut();
 }
 
 void cc::Coroutine::YieldCurCoroutineToReady() {
-	auto cur = GetCurCoroutine();
+	auto cur = cc::this_thread::GetCurCoroutine();
 	SYLAR_ASSERT(cur->GetState() == State::kExec);
 	cur->SetState(State::kReady);
 	cur->SwapOut();

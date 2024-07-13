@@ -8,9 +8,27 @@ namespace sylar {
 namespace concurrency {
 
 class Scheduler;
+class Coroutine;
+
+namespace this_thread {
+
+/// @brief 获得当前线程在当前时刻正在执行或即将执行的协程
+std::shared_ptr<Coroutine> GetCurCoroutine();
+
+/// @brief Return the main coroutine if it's not exist,
+///		   create a main coroutine for this thread.
+///		   It has no effect if it was already created.
+///
+///		   main协程使用当前线程的栈空间，故无需为其分配栈空间
+///		   main协程用以推进当前线程的执行流，故无需为其指定回调函数
+std::shared_ptr<Coroutine> GetMainCoroutine();
+
+} // namespace this_thread
 
 class Coroutine final : public std::enable_shared_from_this<Coroutine> {
 	friend Scheduler;
+	friend std::shared_ptr<Coroutine> this_thread::GetMainCoroutine();
+
 public:
 	using CoroutineId = uint32_t;
 
@@ -23,6 +41,10 @@ public:
 		kExcept
 	};
 
+	/// @brief 创建一个协程对象
+	/// @param func  协程回调函数
+	/// @param stack_size  为该协程对象分配的栈大小
+	/// @pre 存在main_coroutine
 	explicit Coroutine(std::function<void()> func, uint32_t stack_size = 1024 * 1024);
 
 	~Coroutine() noexcept;
@@ -41,11 +63,9 @@ public:
 	CoroutineId GetId() const
 	{ return id_; }
 
-	/// FIXME: as private
-	/// @brief 获得当前线程在当前时刻正在执行或即将执行的协程
-	static std::shared_ptr<Coroutine> GetCurCoroutine();
-
 	void Reset(std::function<void()> func);
+
+	bool IsRunnable() const;
 
 public:
 	static void YieldCurCoroutineToHold();
@@ -64,19 +84,6 @@ private:
 	{ func_(); }
 
 private:
-	/// @brief 设置 routine 为当前运行的协程
-	static void SetCurCoroutine(Coroutine* routine);
-
-	/// @brief 获取当前运行的协程指针
-	// static std::shared_ptr<Coroutine> GetCurCoroutine();
-
-	/// @brief Create a main coroutine for this thread.
-	///		   It has no effect if it was already created.
-	///
-	///		   main协程使用当前线程的栈空间，故无需为其分配栈空间
-	///		   main协程用以推进当前线程的执行流，故无需为其指定回调函数
-	static void CreateMainCoroutine();
-
 	/// @brief 协程入口函数
 	static void CoroutineFunc();
 
