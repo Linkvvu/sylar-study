@@ -126,11 +126,11 @@ cc::Coroutine::~Coroutine() noexcept {
 }
 
 void cc::Coroutine::SwapIn() {
-	SYLAR_ASSERT(cc::this_thread::GetCurCoroutine().get() == cc::this_thread::GetSchedulingCoroutine());
+	SYLAR_ASSERT(cc::this_thread::GetCurCoroutine().get() == cc::this_thread::GetCurSchedulingCoroutine());
 	SYLAR_ASSERT(this->IsRunnable());
 	::SetCurCoroutine(this);
 	this->SetState(State::kExec);
-	if (swapcontext(&cc::this_thread::GetSchedulingCoroutine()->ctx_, &this->ctx_)) {
+	if (swapcontext(&cc::this_thread::GetCurSchedulingCoroutine()->ctx_, &this->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
 		std::abort();
 	}
@@ -138,13 +138,13 @@ void cc::Coroutine::SwapIn() {
 
 void cc::Coroutine::SwapOut() {
 	SYLAR_ASSERT(cc::this_thread::GetCurCoroutine().get() == this);
-	::SetCurCoroutine(cc::this_thread::GetSchedulingCoroutine());
+	::SetCurCoroutine(cc::this_thread::GetCurSchedulingCoroutine());
 	/// FIXME:
 	/// 	should update state for the instance ?
 
 	// Its state is set by the main coroutine to which it belongs,
 	// swap out directly
-	if (swapcontext(&this->ctx_, &cc::this_thread::GetSchedulingCoroutine()->ctx_)) {
+	if (swapcontext(&this->ctx_, &cc::this_thread::GetCurSchedulingCoroutine()->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
 		std::abort();
 	}
