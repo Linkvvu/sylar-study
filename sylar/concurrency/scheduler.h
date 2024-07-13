@@ -21,6 +21,8 @@ public:
 
 	void Start();
 
+	void Stop();
+
 	bool IsStopped() const;
 
 	/// TODO:
@@ -56,9 +58,10 @@ private:
     std::unique_ptr<concurrency::Coroutine> rootCoroutine_;
 	::pthread_t rootPthreadId_;
     std::vector<std::unique_ptr<concurrency::Thread>> threadPool_;
-	std::atomic<bool> stopped_;
-	std::atomic<size_t> activeThreadNum_;
-	std::vector<Scheduler::InvocableWrapper> taskList_ {};
+	std::atomic<bool> stopped_ {true};
+	std::atomic<size_t> activeThreadNum_ {0};
+	std::atomic<size_t> idleThreadNum_ {0};
+	std::vector<Scheduler::InvocableWrapper> taskList_;
 	mutable std::mutex mutex_;
 };
 
@@ -76,7 +79,8 @@ void Scheduler::AddTaskNoLock(Invocable&& func, pthread_t target_thread) {
 namespace this_thread {
 
 /// @brief Get the scheduling coroutine for this thread
-concurrency::Coroutine* GetSchedulingCoroutine();
+concurrency::Coroutine* GetCurSchedulingCoroutine();
+concurrency::Scheduler* GetCurScheduler();
 
 } // namespace this_thread
 } // namespace concurrency

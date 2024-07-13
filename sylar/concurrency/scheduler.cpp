@@ -7,16 +7,26 @@ namespace cc = sylar::concurrency;
 
 namespace {
 
-// /// @brief
-// static thread_local cc::Scheduler* tl_scheduler = nullptr;
+/// @brief 当前线程所属的Scheduler实例
+static thread_local cc::Scheduler* tl_scheduler = nullptr;
 
 /// @brief 当前线程负责调度(任务)协程的(调度)协程对象
 static thread_local cc::Coroutine* tl_scheduling_coroutine = nullptr;
 
 static void SetSchedulingCoroutine(cc::Coroutine* co) {
-	SYLAR_ASSERT_WITH_MSG(tl_scheduling_coroutine == nullptr && co != nullptr,
-			"current already has a scheduling coroutine");
+	if (co) {
+		SYLAR_ASSERT_WITH_MSG(tl_scheduling_coroutine == nullptr,
+				"current already has a scheduling coroutine");
+	}
 	tl_scheduling_coroutine = co;
+}
+
+static void SetScheduler(cc::Scheduler* s) {
+	if (s) {
+		SYLAR_ASSERT_WITH_MSG(tl_scheduler == nullptr,
+				"current already has a scheduler");
+	}
+	tl_scheduler = s;
 }
 
 } // namespace
@@ -29,8 +39,6 @@ cc::Scheduler::Scheduler(size_t thread_num, bool include_cur_thread, std::string
 			: nullptr)
 	, rootPthreadId_(include_cur_thread ? base::GetPthreadId() : INVALID_PTHREAD_ID)
 	, threadPool_((include_cur_thread ? thread_num - 1 : thread_num))
-	, stopped_(true)
-	, activeThreadNum_(0)
 {
 	if (include_cur_thread) {
 		cc::this_thread::GetMainCoroutine();
@@ -38,7 +46,9 @@ cc::Scheduler::Scheduler(size_t thread_num, bool include_cur_thread, std::string
 	}
 }
 
-cc::Scheduler::~Scheduler() noexcept {}
+cc::Scheduler::~Scheduler() noexcept {
+	SYLAR_ASSERT(this->IsStopped());
+}
 
 void cc::Scheduler::Start() {
 	bool expected = true;
@@ -53,17 +63,38 @@ void cc::Scheduler::Start() {
 	}
 }
 
+void cc::Scheduler::Stop() {
+	bool expected = false;
+	if (!stopped_.compare_exchange_strong(expected, true, std::memory_order::memory_order_release)) {
+		return;
+	}
+
+	/// TODO:
+	/// if (rootCoroutine_) {}
+
+	for (size_t i = 0; i < threadPool_.size(); ++i) {
+		threadPool_[i]->Join();
+	}
+}
+
 bool cc::Scheduler::IsStopped() const {
 	std::lock_guard<std::mutex> guard(mutex_);
     return stopped_ && taskList_.empty() && activeThreadNum_ == 0;
 }
 
 void cc::Scheduler::ScheduleFunc() {
+	// set the scheduler(this)
+	::SetScheduler(this);
 	// create main coroutine for current (each) thread
 	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine().get();
 
-	// set self as the scheduling coroutine of this thread
-	::SetSchedulingCoroutine(scheduling_coroutine);
+	if (this->rootCoroutine_ && base::GetPthreadId() == this->rootPthreadId_) {
+		// set Scheduler::root-routine as the scheduling coroutine of this thread
+		::SetSchedulingCoroutine(rootCoroutine_.get());
+	} else {
+		// set main-routine of current thread as the scheduling coroutine of this thread
+		::SetSchedulingCoroutine(scheduling_coroutine);
+	}
 
 	// create idle_coroutine to handle idle event
 	auto idle_coroutine = std::make_shared<cc::Coroutine>(std::bind(&Scheduler::HandleIdle, this));
@@ -95,7 +126,9 @@ void cc::Scheduler::ScheduleFunc() {
 				/// 	以下断言并不能避免协程被多个线程执行，因为该协程
 				///     或许被其他scheduling coroutine获取，并即将执行，
 				///		只是还未改变状态
-				SYLAR_ASSERT(it->coroutine && it->coroutine->GetState() != Coroutine::State::kExec);
+				if (it->coroutine) {
+					SYLAR_ASSERT(it->coroutine->GetState() != Coroutine::State::kExec);
+				}
 				current_task = std::move(*it);
 				taskList_.erase(it);
 				has_task = true;
@@ -136,7 +169,7 @@ void cc::Scheduler::ScheduleFunc() {
 				// add to list again (need a lock here, optimize it)
 				Co(std::move(temp_coroutine));
 			} else if (temp_coroutine->GetState() == cc::Coroutine::State::kTerminal
-					&& temp_coroutine->GetState() == cc::Coroutine::State::kExcept)
+					|| temp_coroutine->GetState() == cc::Coroutine::State::kExcept)
 			{
 				temp_coroutine->Reset(nullptr);
 			} else {
@@ -153,9 +186,9 @@ void cc::Scheduler::ScheduleFunc() {
 				break;
 			}
 
-			++activeThreadNum_;
+			++idleThreadNum_;
 			idle_coroutine->SwapIn();
-			--activeThreadNum_;
+			--idleThreadNum_;
 			if (idle_coroutine->GetState() != cc::Coroutine::State::kTerminal
 					&& idle_coroutine->GetState() != cc::Coroutine::State::kExcept)
 			{
@@ -163,6 +196,8 @@ void cc::Scheduler::ScheduleFunc() {
 			}
 		}
 	}
+
+	::SetSchedulingCoroutine(nullptr);
 }
 
 void cc::Scheduler::HandleIdle() {
@@ -200,6 +235,10 @@ void cc::Scheduler::InvocableWrapper::Reset() {
 	this->coroutine.reset();
 }
 
-cc::Coroutine* cc::this_thread::GetSchedulingCoroutine() {
+cc::Coroutine* cc::this_thread::GetCurSchedulingCoroutine() {
     return tl_scheduling_coroutine;
+}
+
+concurrency::Scheduler* sylar::concurrency::this_thread::GetCurScheduler() {
+    return tl_scheduler;
 }
