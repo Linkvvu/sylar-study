@@ -3,6 +3,9 @@
 #include <sys/types.h>
 #include <pthread.h>
 
+#define INVALID_PTHREAD_ID 0
+#define INVALID_TID -1
+
 namespace sylar {
 namespace base {
 
