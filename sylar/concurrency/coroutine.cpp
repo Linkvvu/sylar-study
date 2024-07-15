@@ -28,12 +28,12 @@ thread_local static cc::Coroutine* tl_p_cur_coroutine = nullptr;
 /// @brief 当前线程中的主协程(第一个被构造的协程)， 用于保存线程自身执行流的上下文
 thread_local static std::shared_ptr<cc::Coroutine> tl_sp_main_coroutine = nullptr;
 
-static void SetCurrentRunnginCoroutine(Coroutine* co) {
+static void SetCurrentRunningCoroutine(Coroutine* co) {
 	tl_p_cur_coroutine = co;
 }
 
 } // namespace this_thread
-} // namespace cocurrency
+} // namespace concurrency
 } // namespace sylar
 
 cc::Coroutine* cc::this_thread::GetMainCoroutine() {
@@ -45,7 +45,7 @@ cc::Coroutine* cc::this_thread::GetMainCoroutine() {
 		tl_sp_main_coroutine = std::move(main_coroutine);
 
 		// sets it as current coroutine for current thread
-		cc::this_thread::SetCurrentRunnginCoroutine(tl_sp_main_coroutine.get());
+		cc::this_thread::SetCurrentRunningCoroutine(tl_sp_main_coroutine.get());
 	}
 	return tl_sp_main_coroutine.get();
 }
@@ -118,9 +118,21 @@ cc::Coroutine::~Coroutine() noexcept {
 		::free(stackFrame_);
 	} else {
         SYLAR_ASSERT(func_ == nullptr);
-		SYLAR_ASSERT(GetState() == State::kExec);
-		SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this);
-		this_thread::SetCurrentRunnginCoroutine(nullptr);
+		SYLAR_ASSERT(this->GetState() == State::kExec);
+		SYLAR_ASSERT(this_thread::tl_p_cur_coroutine == this);
+
+		/// FIXME:
+		/// 	在这种情况下，一定是当前线程生命周期结束，
+		///		释放了存储期为thread-local的main线程
+		///
+		///		特例：
+		///			由Scheduler实例创建的 dummy main coroutine 被析构时
+		///			以下断言为false
+		/// 	@code
+		///				SYLAR_ASSERT(this_thread::tl_p_cur_coroutine == this_thread::GetMainCoroutine());
+		/// 			this_thread::tl_sp_main_coroutine = nullptr;
+		///		@endcode
+		this_thread::SetCurrentRunningCoroutine(nullptr);
 	}
 
 	// updates the coroutine counter
@@ -133,7 +145,7 @@ cc::Coroutine::~Coroutine() noexcept {
 void cc::Coroutine::SwapIn() {
 	SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this_thread::GetSchedulingCoroutine());
 	SYLAR_ASSERT(GetState() != State::kExec);
-	this_thread::SetCurrentRunnginCoroutine(this);
+	this_thread::SetCurrentRunningCoroutine(this);
 	SetState(State::kExec);
 	if (swapcontext(&cc::this_thread::GetMainCoroutine()->ctx_, &this->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
@@ -143,8 +155,7 @@ void cc::Coroutine::SwapIn() {
 
 void cc::Coroutine::SwapOut() {
 	SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this);
-	SYLAR_ASSERT(GetState() == State::kExec);
-	this_thread::SetCurrentRunnginCoroutine(cc::this_thread::GetSchedulingCoroutine());
+	this_thread::SetCurrentRunningCoroutine(cc::this_thread::GetSchedulingCoroutine());
 
 	if (swapcontext(&this->ctx_, &cc::this_thread::GetMainCoroutine()->ctx_)) {
 		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;

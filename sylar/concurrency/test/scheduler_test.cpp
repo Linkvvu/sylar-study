@@ -14,14 +14,14 @@ void Test_CoroutineFunc() {
 	std::this_thread::sleep_for(std::chrono::seconds(1));
 
 	if (s_count-- > 0) {
-		cc::this_thread::GetCurScheduler()->Co(&Test_CoroutineFunc, base::GetPthreadId());
+		cc::this_thread::GetScheduler()->Co(&Test_CoroutineFunc, base::GetPthreadId());
 	}
 }
 
 int main() {
 	cc::Scheduler scheduler(3, false, "TestScheduler");
+	scheduler.Co(&Test_CoroutineFunc);
 	scheduler.Start();
 	std::this_thread::sleep_for(std::chrono::seconds(5));
-	scheduler.Co(&Test_CoroutineFunc);
 	scheduler.Stop();
 }
