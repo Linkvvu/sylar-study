@@ -13,6 +13,13 @@ namespace concurrency {
 
 class Thread;
 
+namespace this_thread {
+
+Scheduler* GetScheduler();
+Coroutine* GetSchedulingCoroutine();
+
+} // namespace this_thread
+
 class Scheduler {
 public:
     explicit Scheduler(size_t thread_num, bool include_cur_thread, std::string name);
@@ -30,8 +37,11 @@ public:
 	template <typename Invocable>
 	void Co(Invocable&& func, pthread_t target_thread = 0);
 
+	/// @brief 断言当前是否在该调度器所管理的线程中执行
+	void AssertInScheduleingScope() const;
+
 private:
-	void ScheduleFunc();
+	void SchedulingFunc();
 
 	template <typename Invocable>
 	void AddTaskNoLock(Invocable&& func, pthread_t target_thread);
@@ -76,12 +86,5 @@ void Scheduler::AddTaskNoLock(Invocable&& func, pthread_t target_thread) {
 	taskList_.emplace_back(std::forward<Invocable>(func), target_thread);
 }
 
-namespace this_thread {
-
-/// @brief Get the scheduling coroutine for this thread
-concurrency::Coroutine* GetCurSchedulingCoroutine();
-concurrency::Scheduler* GetCurScheduler();
-
-} // namespace this_thread
 } // namespace concurrency
 } // namespace sylar

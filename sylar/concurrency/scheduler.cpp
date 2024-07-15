@@ -5,7 +5,9 @@
 using namespace sylar;
 namespace cc = sylar::concurrency;
 
-namespace {
+namespace sylar {
+namespace concurrency {
+namespace this_thread {
 
 /// @brief 当前线程所属的Scheduler实例
 static thread_local cc::Scheduler* tl_scheduler = nullptr;
@@ -21,28 +23,39 @@ static void SetSchedulingCoroutine(cc::Coroutine* co) {
 	tl_scheduling_coroutine = co;
 }
 
-static void SetScheduler(cc::Scheduler* s) {
-	if (s) {
-		SYLAR_ASSERT_WITH_MSG(tl_scheduler == nullptr,
-				"current already has a scheduler");
+static void SetSchedulder(cc::Scheduler* scheduler) {
+	if (scheduler) {
+		SYLAR_ASSERT(tl_scheduler == nullptr);
 	}
-	tl_scheduler = s;
+	tl_scheduler = scheduler;
 }
 
-} // namespace
+Coroutine* GetSchedulingCoroutine() {
+    return tl_scheduling_coroutine;
+}
+
+Scheduler* GetScheduler() {
+    return tl_scheduler;
+}
+
+} // namespace this_thread
+} // namespace concurrency
+} // namespace sylar
+
 
 cc::Scheduler::Scheduler(size_t thread_num, bool include_cur_thread, std::string name)
 	: name_(std::move(name))
 	, rootCoroutine_(include_cur_thread
 			? std::make_unique<cc::Coroutine>(
-					std::bind(&Scheduler::ScheduleFunc, this), 0)
+					std::bind(&Scheduler::SchedulingFunc, this), 0)
 			: nullptr)
 	, rootPthreadId_(include_cur_thread ? base::GetPthreadId() : INVALID_PTHREAD_ID)
 	, threadPool_((include_cur_thread ? thread_num - 1 : thread_num))
 {
 	if (include_cur_thread) {
 		cc::this_thread::GetMainCoroutine();
-		::SetSchedulingCoroutine(rootCoroutine_.get());
+		cc::this_thread::SetSchedulder(this);
+		cc::this_thread::SetSchedulingCoroutine(rootCoroutine_.get());
 	}
 }
 
@@ -56,7 +69,7 @@ void cc::Scheduler::Start() {
 		for (size_t i = 0; i < threadPool_.size(); ++i) {
 			threadPool_[i].reset(new cc::Thread(
 				[this]() {
-					this->ScheduleFunc();
+					this->SchedulingFunc();
 				}, name_ + "_" + std::to_string(i)
 			));
 		}
@@ -82,18 +95,18 @@ bool cc::Scheduler::IsStopped() const {
     return stopped_ && taskList_.empty() && activeThreadNum_ == 0;
 }
 
-void cc::Scheduler::ScheduleFunc() {
+void cc::Scheduler::SchedulingFunc() {
 	// set the scheduler(this)
-	::SetScheduler(this);
+	cc::this_thread::SetSchedulder(this);
 	// create main coroutine for current (each) thread
-	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine().get();
+	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine();
 
 	if (this->rootCoroutine_ && base::GetPthreadId() == this->rootPthreadId_) {
 		// set Scheduler::root-routine as the scheduling coroutine of this thread
-		::SetSchedulingCoroutine(rootCoroutine_.get());
+		cc::this_thread::SetSchedulingCoroutine(rootCoroutine_.get());
 	} else {
 		// set main-routine of current thread as the scheduling coroutine of this thread
-		::SetSchedulingCoroutine(scheduling_coroutine);
+		cc::this_thread::SetSchedulingCoroutine(scheduling_coroutine);
 	}
 
 	// create idle_coroutine to handle idle event
@@ -197,7 +210,7 @@ void cc::Scheduler::ScheduleFunc() {
 		}
 	}
 
-	::SetSchedulingCoroutine(nullptr);
+	cc::this_thread::SetSchedulingCoroutine(nullptr);
 }
 
 void cc::Scheduler::HandleIdle() {
@@ -207,6 +220,11 @@ void cc::Scheduler::HandleIdle() {
 		// swap to the scheduling coroutine
 		cc::Coroutine::YieldCurCoroutineToHold();
 	}
+}
+
+void cc::Scheduler::AssertInScheduleingScope() const {
+	SYLAR_ASSERT_WITH_MSG(this == cc::this_thread::GetScheduler(),
+		"runs outside the scheduling scope");
 }
 
 cc::Scheduler::InvocableWrapper::InvocableWrapper(const std::shared_ptr<cc::Coroutine>& co, ::pthread_t pthread_id)
@@ -233,12 +251,4 @@ void cc::Scheduler::InvocableWrapper::Reset() {
 	this->target_thread = 0;
 	this->callback = nullptr;
 	this->coroutine.reset();
-}
-
-cc::Coroutine* cc::this_thread::GetCurSchedulingCoroutine() {
-    return tl_scheduling_coroutine;
-}
-
-concurrency::Scheduler* sylar::concurrency::this_thread::GetCurScheduler() {
-    return tl_scheduler;
 }
