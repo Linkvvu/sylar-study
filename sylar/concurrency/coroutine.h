@@ -12,22 +12,21 @@ class Coroutine;
 
 namespace this_thread {
 
-/// @brief 获得当前线程在当前时刻正在执行或即将执行的协程
-std::shared_ptr<Coroutine> GetCurCoroutine();
-
-/// @brief Return the main coroutine if it's not exist,
-///		   create a main coroutine for this thread.
-///		   It has no effect if it was already created.
+/// @brief Get the main coroutine of this thread,
+///		   if it's not exist, create it.
 ///
 ///		   main协程使用当前线程的栈空间，故无需为其分配栈空间
-///		   main协程用以推进当前线程的执行流，故无需为其指定回调函数
-std::shared_ptr<Coroutine> GetMainCoroutine();
+///		   main协程以当前线程的执行流推进，故无需为其指定回调函数
+Coroutine* GetMainCoroutine();
+
+/// @brief 获得当前线程在当前时刻正在执行或即将执行的协程
+std::shared_ptr<Coroutine> GetCurrentRunningCoroutine();
 
 } // namespace this_thread
 
 class Coroutine final : public std::enable_shared_from_this<Coroutine> {
 	friend Scheduler;
-	friend std::shared_ptr<Coroutine> this_thread::GetMainCoroutine();
+	friend Coroutine* concurrency::this_thread::GetMainCoroutine();
 
 public:
 	using CoroutineId = uint32_t;
