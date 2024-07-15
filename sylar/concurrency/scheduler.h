@@ -12,6 +12,7 @@ namespace sylar {
 namespace concurrency {
 
 class Thread;
+class EpollPoller;
 
 namespace this_thread {
 
@@ -24,7 +25,7 @@ class Scheduler {
 public:
     explicit Scheduler(size_t thread_num, bool include_cur_thread, std::string name);
 
-	virtual ~Scheduler() noexcept;
+	~Scheduler() noexcept;
 
 	void Start();
 
@@ -38,7 +39,7 @@ public:
 	void Co(Invocable&& func, pthread_t target_thread = 0);
 
 	/// @brief 断言当前是否在该调度器所管理的线程中执行
-	void AssertInScheduleingScope() const;
+	void AssertInSchedulingScope() const;
 
 private:
 	void SchedulingFunc();
@@ -46,7 +47,7 @@ private:
 	template <typename Invocable>
 	void AddTaskNoLock(Invocable&& func, pthread_t target_thread);
 
-	virtual void HandleIdle();
+	void HandleIdle();
 
 	struct InvocableWrapper {
 		InvocableWrapper() : target_thread(0), callback(nullptr), coroutine(nullptr) {}
@@ -65,8 +66,9 @@ private:
 
 private:
     std::string name_;
-    std::unique_ptr<concurrency::Coroutine> rootCoroutine_;
-	::pthread_t rootPthreadId_;
+    std::unique_ptr<concurrency::Coroutine> dummyMainCoroutine_;
+	::pthread_t dummyMainTrdPthreadId_;
+	std::unique_ptr<concurrency::EpollPoller> poller_;
     std::vector<std::unique_ptr<concurrency::Thread>> threadPool_;
 	std::atomic<bool> stopped_ {true};
 	std::atomic<size_t> activeThreadNum_ {0};

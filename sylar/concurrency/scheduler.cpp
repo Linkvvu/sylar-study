@@ -1,5 +1,6 @@
 #include <concurrency/scheduler.h>
 #include <concurrency/thread.h>
+#include <concurrency/epoll_poller.h>
 #include <base/debug.h>
 
 using namespace sylar;
@@ -23,7 +24,7 @@ static void SetSchedulingCoroutine(cc::Coroutine* co) {
 	tl_scheduling_coroutine = co;
 }
 
-static void SetSchedulder(cc::Scheduler* scheduler) {
+static void SetScheduler(cc::Scheduler* scheduler) {
 	if (scheduler) {
 		SYLAR_ASSERT(tl_scheduler == nullptr);
 	}
@@ -45,17 +46,18 @@ Scheduler* GetScheduler() {
 
 cc::Scheduler::Scheduler(size_t thread_num, bool include_cur_thread, std::string name)
 	: name_(std::move(name))
-	, rootCoroutine_(include_cur_thread
+	, dummyMainCoroutine_(include_cur_thread
 			? std::make_unique<cc::Coroutine>(
 					std::bind(&Scheduler::SchedulingFunc, this), 0)
 			: nullptr)
-	, rootPthreadId_(include_cur_thread ? base::GetPthreadId() : INVALID_PTHREAD_ID)
+	, dummyMainTrdPthreadId_(include_cur_thread ? base::GetPthreadId() : INVALID_PTHREAD_ID)
+	, poller_(std::make_unique<cc::EpollPoller>(this))
 	, threadPool_((include_cur_thread ? thread_num - 1 : thread_num))
 {
 	if (include_cur_thread) {
 		cc::this_thread::GetMainCoroutine();
-		cc::this_thread::SetSchedulder(this);
-		cc::this_thread::SetSchedulingCoroutine(rootCoroutine_.get());
+		cc::this_thread::SetScheduler(this);
+		cc::this_thread::SetSchedulingCoroutine(dummyMainCoroutine_.get());
 	}
 }
 
@@ -83,7 +85,7 @@ void cc::Scheduler::Stop() {
 	}
 
 	/// TODO:
-	/// if (rootCoroutine_) {}
+	/// if (dummyMainCoroutine_) {}
 
 	for (size_t i = 0; i < threadPool_.size(); ++i) {
 		threadPool_[i]->Join();
@@ -97,13 +99,13 @@ bool cc::Scheduler::IsStopped() const {
 
 void cc::Scheduler::SchedulingFunc() {
 	// set the scheduler(this)
-	cc::this_thread::SetSchedulder(this);
+	cc::this_thread::SetScheduler(this);
 	// create main coroutine for current (each) thread
 	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine();
 
-	if (this->rootCoroutine_ && base::GetPthreadId() == this->rootPthreadId_) {
+	if (this->dummyMainCoroutine_ && base::GetPthreadId() == this->dummyMainTrdPthreadId_) {
 		// set Scheduler::root-routine as the scheduling coroutine of this thread
-		cc::this_thread::SetSchedulingCoroutine(rootCoroutine_.get());
+		cc::this_thread::SetSchedulingCoroutine(dummyMainCoroutine_.get());
 	} else {
 		// set main-routine of current thread as the scheduling coroutine of this thread
 		cc::this_thread::SetSchedulingCoroutine(scheduling_coroutine);
@@ -217,12 +219,14 @@ void cc::Scheduler::HandleIdle() {
 	SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "Scheduler::HandleIdle is invoked" << std::endl;
 
 	while (!IsStopped()) {
+		poller_->PollAndHandle();
+
 		// swap to the scheduling coroutine
 		cc::Coroutine::YieldCurCoroutineToHold();
 	}
 }
 
-void cc::Scheduler::AssertInScheduleingScope() const {
+void cc::Scheduler::AssertInSchedulingScope() const {
 	SYLAR_ASSERT_WITH_MSG(this == cc::this_thread::GetScheduler(),
 		"runs outside the scheduling scope");
 }
