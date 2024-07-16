@@ -37,40 +37,67 @@ cc::EpollPoller::EpollPoller(Scheduler* owner)
 cc::EpollPoller::~EpollPoller() noexcept {
 	::epoll_ctl(epollFd_, EPOLL_CTL_DEL, notifier_->GetEventFd(), nullptr);
 	::close(epollFd_);
+
+	for (const auto& pair : eventSet_) {
+		delete pair.second;
+	}
 }
 
-void cc::EpollPoller::AddEvent(int fd, unsigned interest_events, std::function<void()> func) {
-	// FIXME: 应该支持追加事件
-	Event* event;
-	{
+void cc::EpollPoller::UpdateEvent(int fd, unsigned interest_events, std::function<void()> func) {
+	Event* event = nullptr;
+	{	// try to get
+		std::shared_lock<std::shared_mutex> shared_guard(mutex_);
+		bool exist = eventSet_.count(fd);
+		if (exist)
+			event = eventSet_[fd];
+	}
+
+	if (event == nullptr) {
 		std::lock_guard<std::shared_mutex> guard(mutex_);
-		SYLAR_ASSERT(eventSet_.count(fd) == 0 || eventSet_[fd] == nullptr);
-		eventSet_[fd] = std::make_shared<Event>();
-		event = eventSet_[fd].get();
+		if (eventSet_[fd] == nullptr) {
+			eventSet_[fd] = new Event();
+		}
+		event = eventSet_[fd];
 	}
 
 	std::lock_guard<std::mutex> guard(event->mutex);
-	event->fd = fd;
-	event->interest_event = EPOLLET | interest_events;
-	Update(EPOLL_CTL_ADD, event);
+	if (event->state_index == Event::StateIndex::kNew || event->state_index == Event::StateIndex::kDeleted) {
+		if (event->state_index == Event::StateIndex::kNew) {
+			event->fd = fd;
+		}
 
-	if (event->interest_event & EPOLLIN) {
-		event->read_context.owner = this->owner_;
-		if (func) {
-			event->read_context.func = std::move(func);
+		event->interest_event = EPOLLET | interest_events;
+		event->state_index = Event::StateIndex::kAdded;
+		Update(EPOLL_CTL_ADD, event);
+	} else {
+		if (interest_events == 0) {
+			Update(EPOLL_CTL_DEL, event);
+			event->Reset();
+			event->state_index = Event::StateIndex::kDeleted;
 		} else {
-			event->read_context.co = cc::this_thread::GetCurrentRunningCoroutine();		/// ?????
+			event->interest_event = (EPOLLET | interest_events);
+			Update(EPOLL_CTL_MOD, event);
 		}
 	}
 
-	if (event->interest_event & EPOLLOUT) {
-		event->write_context.owner = this->owner_;
-		if (func) {
-			event->write_context.func = std::move(func);
-		} else {
-			event->write_context.co = cc::this_thread::GetCurrentRunningCoroutine();	/// ?????
+	if (event->state_index == Event::StateIndex::kAdded) {
+		if (event->interest_event & EPOLLIN) {
+			if (func) {
+				event->read_context.func = std::move(func);
+			} else {
+				event->read_context.co = cc::this_thread::GetCurrentRunningCoroutine();		/// ?????
+			}
+		}
+
+		if (event->interest_event & EPOLLOUT) {
+			if (func) {
+				event->write_context.func = std::move(func);
+			} else {
+				event->write_context.co = cc::this_thread::GetCurrentRunningCoroutine();	/// ?????
+			}
 		}
 	}
+
 }
 
 void cc::EpollPoller::PollAndHandle() {
@@ -121,7 +148,7 @@ void cc::EpollPoller::HandleReadyEvent(epoll_event* ready_event_array, size_t le
 		{
 			std::shared_lock<std::shared_mutex> read_lock(this->mutex_);
 			SYLAR_ASSERT(eventSet_.count(current_event->fd) == 1);
-			SYLAR_ASSERT(eventSet_[current_event->fd].get() == current_event);
+			SYLAR_ASSERT(eventSet_[current_event->fd] == current_event);
 		}
 #endif
 
@@ -132,8 +159,16 @@ void cc::EpollPoller::HandleReadyEvent(epoll_event* ready_event_array, size_t le
 		}
 
 		// 更新兴趣事件，只关注剩余的事件, 设置 EPOLLET 为避免多线程惊群现象, 用于同步多线程同时在一个epoll实例上等待
-		unsigned left_events = EPOLLET | (current_event->interest_event & ~cur_e_e.events);
-		int op = left_events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+		unsigned left_events = current_event->interest_event & ~cur_e_e.events;
+		// int op = left_events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+		current_event->interest_event = left_events | EPOLLET;
+		int op = -1;
+		if (left_events != 0) {
+			op = EPOLL_CTL_MOD;
+		} else {
+			op = EPOLL_CTL_DEL;
+			current_event->state_index = Event::StateIndex::kDeleted;
+		}
 		Update(op, current_event);
 		HandleEpollEvent(current_event, cur_e_e.events);
 	}
@@ -160,11 +195,7 @@ void cc::EpollPoller::HandleEpollEvent(Event* event_instance, unsigned ready_eve
 	}
 
 	if (ready_event & EPOLLERR) {
-		/// FIXME: use ::getsockopt to get error
-		SYLAR_LOG_WARN(sys_logger) << "fd " << event_instance->fd
-				<< " occurred a error, errno=" << errno
-				<< ", errstr: " << std::strerror(errno)
-				 << std::endl;
+		/// TODO: use ::getsockopt to get error
 	}
 
 	if (ready_event & (EPOLLIN | EPOLLRDHUP | EPOLLPRI)) {
@@ -174,7 +205,7 @@ void cc::EpollPoller::HandleEpollEvent(Event* event_instance, unsigned ready_eve
 
 	if (ready_event & EPOLLOUT) {
 		// 封装写任务协程入队
-		TriggerAndRemove(event_instance, EventEnum::kRead);
+		TriggerAndRemove(event_instance, EventEnum::kWrite);
 	}
 }
 
@@ -182,21 +213,20 @@ void cc::EpollPoller::TriggerAndRemove(Event* event, EventEnum flag) {
 	switch (flag) {
 	case EventEnum::kRead:
 		SYLAR_ASSERT(event->read_context.func || event->read_context.co);
-		SYLAR_ASSERT(event->read_context.owner);
 
 		if (event->read_context.co) {
-			event->read_context.owner->Co(std::move(event->read_context.co));
+			this->owner_->Co(std::move(event->read_context.co));
 		} else {
-			event->read_context.owner->Co(std::move(event->read_context.func));
+			this->owner_->Co(std::move(event->read_context.func));
 		}
 		break;
 	case EventEnum::kWrite:
 		SYLAR_ASSERT(event->write_context.func || event->write_context.co);
-		SYLAR_ASSERT(event->write_context.owner);
+
 		if (event->write_context.co) {
-			event->write_context.owner->Co(std::move(event->write_context.co));
+			this->owner_->Co(std::move(event->write_context.co));
 		} else {
-			event->write_context.owner->Co(std::move(event->write_context.func));
+			this->owner_->Co(std::move(event->write_context.func));
 		}
 		break;
 	}
