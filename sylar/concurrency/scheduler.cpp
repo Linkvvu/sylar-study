@@ -1,5 +1,6 @@
 #include <concurrency/scheduler.h>
 #include <concurrency/thread.h>
+#include <concurrency/notifier.h>
 #include <concurrency/epoll_poller.h>
 #include <base/debug.h>
 
@@ -84,9 +85,13 @@ void cc::Scheduler::Stop() {
 		return;
 	}
 
-	/// TODO:
-	/// if (dummyMainCoroutine_) {}
+	Notify(threadPool_.size());
 
+	if (dummyMainCoroutine_) {
+		Notify();
+	}
+
+	// 对于 threadPool_ 的读写操作，理想情况下不加锁也是可以的
 	for (size_t i = 0; i < threadPool_.size(); ++i) {
 		threadPool_[i]->Join();
 	}
@@ -94,7 +99,7 @@ void cc::Scheduler::Stop() {
 
 bool cc::Scheduler::IsStopped() const {
 	std::lock_guard<std::mutex> guard(mutex_);
-    return stopped_ && taskList_.empty() && activeThreadNum_ == 0;
+    return stopped_ && taskList_.empty();
 }
 
 void cc::Scheduler::SchedulingFunc() {
@@ -120,8 +125,8 @@ void cc::Scheduler::SchedulingFunc() {
 	InvocableWrapper current_task {};
 	while (true) {
 		bool has_task = false;
+		bool need_notify = false;
 		current_task.Reset();
-		// bool need_notify = false;
 		{
 			std::lock_guard<std::mutex> guard(mutex_);
 			decltype(taskList_)::iterator it;
@@ -129,7 +134,7 @@ void cc::Scheduler::SchedulingFunc() {
 				if (it->target_thread != INVALID_PTHREAD_ID
 						&& it->target_thread != base::GetPthreadId())
 				{
-					// need_notify = true;
+					need_notify = true;
 					continue;
 				}
 
@@ -149,6 +154,13 @@ void cc::Scheduler::SchedulingFunc() {
 				has_task = true;
 				break;
 			}
+
+			need_notify = need_notify || !taskList_.empty();
+		}
+
+		if (need_notify) {
+			// 只通知一个线程获取任务，避免多个线程竞争锁，并将唤醒的责任移交给它
+			Notify();
 		}
 
 		if (current_task.coroutine &&
@@ -226,9 +238,17 @@ void cc::Scheduler::HandleIdle() {
 	}
 }
 
+void cc::Scheduler::Notify(uint64_t num) {
+	poller_->GetNotifier()->Notify(num);
+}
+
 void cc::Scheduler::AssertInSchedulingScope() const {
 	SYLAR_ASSERT_WITH_MSG(this == cc::this_thread::GetScheduler(),
 		"runs outside the scheduling scope");
+}
+
+void cc::Scheduler::AddEvent(int fd, unsigned interest_events, std::function<void()> func) {
+	poller_->AddEvent(fd, interest_events, std::move(func));
 }
 
 cc::Scheduler::InvocableWrapper::InvocableWrapper(const std::shared_ptr<cc::Coroutine>& co, ::pthread_t pthread_id)

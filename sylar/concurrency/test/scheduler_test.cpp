@@ -20,8 +20,7 @@ void Test_CoroutineFunc() {
 
 int main() {
 	cc::Scheduler scheduler(3, false, "TestScheduler");
-	scheduler.Co(&Test_CoroutineFunc);
 	scheduler.Start();
-	std::this_thread::sleep_for(std::chrono::seconds(5));
+	scheduler.Co(&Test_CoroutineFunc);
 	scheduler.Stop();
 }

@@ -1,11 +1,13 @@
 #include <base/log.h>
 #include <base/debug.h>
+#include <concurrency/notifier.h>
 #include <concurrency/epoll_poller.h>
 
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 using namespace sylar;
 namespace cc = sylar::concurrency;
@@ -15,12 +17,26 @@ static auto sys_logger = SYLAR_SYS_LOGGER();
 cc::EpollPoller::EpollPoller(Scheduler* owner)
 	: owner_(owner)
 	, epollFd_(::epoll_create1(O_CLOEXEC))
+	, notifier_(std::make_unique<Notifier>(owner))
 {
 	if (epollFd_ == -1) {
 		SYLAR_LOG_FMT_FATAL(sys_logger, "failed to invoke ::epoll_create, errno=%d, errstr: %s, about to exit\n"
 				, errno, std::strerror(errno));
 		std::abort();
 	}
+
+	/// FIXME:
+	///		重构Notifier与Poller的关系
+	struct ::epoll_event notifier_e_e;
+	std::memset(&notifier_e_e, 0, sizeof(::epoll_event));
+	notifier_e_e.data.fd = notifier_->GetEventFd();
+	notifier_e_e.events = EPOLLIN;
+	::epoll_ctl(epollFd_, EPOLL_CTL_ADD, notifier_->GetEventFd(), &notifier_e_e);
+}
+
+cc::EpollPoller::~EpollPoller() noexcept {
+	::epoll_ctl(epollFd_, EPOLL_CTL_DEL, notifier_->GetEventFd(), nullptr);
+	::close(epollFd_);
 }
 
 void cc::EpollPoller::AddEvent(int fd, unsigned interest_events, std::function<void()> func) {
@@ -93,6 +109,12 @@ void cc::EpollPoller::PollAndHandle() {
 void cc::EpollPoller::HandleReadyEvent(epoll_event* ready_event_array, size_t length) {
 	for (size_t i = 0; i < length; ++i) {
 		auto cur_e_e = ready_event_array[i];
+
+		if (cur_e_e.data.fd == notifier_->GetEventFd()) {
+			notifier_->HandleEventFd();
+			continue;
+		}
+
 		Event* current_event = static_cast<Event*>(cur_e_e.data.ptr);
 
 #ifndef NDEBUG
