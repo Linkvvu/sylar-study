@@ -6,6 +6,7 @@ set(
   thread.cpp
   scheduler.cpp
   epoll_poller.cpp
+  notifier.cpp
 )
 
 source_group(${PROJECT_NAME} FILES ${SYLAR_CONCURRENCY_SRC})

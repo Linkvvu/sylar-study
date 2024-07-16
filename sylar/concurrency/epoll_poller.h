@@ -8,6 +8,8 @@
 namespace sylar {
 namespace concurrency {
 
+class Notifier;
+
 struct Event {
 	struct {
 		std::function<void()> func;
@@ -31,10 +33,15 @@ class EpollPoller {
 public:
 	EpollPoller(Scheduler* owner);
 
+	~EpollPoller() noexcept;
+
 	/// @brief Poll and handle ready events, wrap events as a coroutine
 	void PollAndHandle();
 
 	void AddEvent(int fd, unsigned interest_events, std::function<void()> func);
+
+	Notifier* GetNotifier() const
+	{ return notifier_.get(); }
 
 private:
 	enum class EventEnum : unsigned {
@@ -56,6 +63,7 @@ private:
 	concurrency::Scheduler* owner_;
 	int epollFd_;
 	std::unordered_map<int, std::shared_ptr<Event>> eventSet_;
+	std::unique_ptr<Notifier> notifier_;
 	mutable std::shared_mutex mutex_;
 };
 
