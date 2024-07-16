@@ -11,20 +11,33 @@ namespace concurrency {
 class Notifier;
 
 struct Event {
+	enum class StateIndex : uint8_t {
+		kNew,
+		kDeleted,
+		kAdded
+	};
+
 	struct {
 		std::function<void()> func;
 		std::shared_ptr<concurrency::Coroutine> co;
-		Scheduler* owner;
 	} read_context;
 
 	struct {
 		std::function<void()> func;
 		std::shared_ptr<concurrency::Coroutine> co;
-		Scheduler* owner;
 	} write_context;
 
-	int fd;
-	unsigned interest_event;
+	void Reset() {
+		this->fd = -1;
+		this->interest_event = 0;
+		this->state_index = StateIndex::kNew;
+		this->read_context = {};
+		this->write_context = {};
+	}
+
+	int fd = -1;
+	unsigned interest_event = 0;
+	StateIndex state_index = StateIndex::kNew;
 	// unsigned ready_event;
 	std::mutex mutex;
 };
@@ -38,7 +51,7 @@ public:
 	/// @brief Poll and handle ready events, wrap events as a coroutine
 	void PollAndHandle();
 
-	void AddEvent(int fd, unsigned interest_events, std::function<void()> func);
+	void UpdateEvent(int fd, unsigned interest_events, std::function<void()> func);
 
 	Notifier* GetNotifier() const
 	{ return notifier_.get(); }
@@ -62,7 +75,7 @@ private:
 private:
 	concurrency::Scheduler* owner_;
 	int epollFd_;
-	std::unordered_map<int, std::shared_ptr<Event>> eventSet_;
+	std::unordered_map<int, Event*> eventSet_;
 	std::unique_ptr<Notifier> notifier_;
 	mutable std::shared_mutex mutex_;
 };

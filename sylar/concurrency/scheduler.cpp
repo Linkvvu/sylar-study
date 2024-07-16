@@ -247,8 +247,8 @@ void cc::Scheduler::AssertInSchedulingScope() const {
 		"runs outside the scheduling scope");
 }
 
-void cc::Scheduler::AddEvent(int fd, unsigned interest_events, std::function<void()> func) {
-	poller_->AddEvent(fd, interest_events, std::move(func));
+void cc::Scheduler::UpdateEvent(int fd, unsigned interest_events, std::function<void()> func) {
+	poller_->UpdateEvent(fd, interest_events, std::move(func));
 }
 
 cc::Scheduler::InvocableWrapper::InvocableWrapper(const std::shared_ptr<cc::Coroutine>& co, ::pthread_t pthread_id)
