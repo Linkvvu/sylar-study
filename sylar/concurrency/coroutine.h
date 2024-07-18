@@ -43,8 +43,13 @@ public:
 	/// @brief 创建一个协程对象
 	/// @param func  协程回调函数
 	/// @param stack_size  为该协程对象分配的栈大小
+	/// @param is_dummy_main_coroutine  是否为 dummy-main 协程, 若为 dummy-main 协程，
+	///									说明主线程的也作为调度线程，其实现是通过 切换至调
+	///									度协程 dummy-main 协程进行调度，当调度结束时，
+	///									应该切换回主线程的执行流，而不是调度协程，因为调
+	///									度协程就是 dummy-main 协程本身。
 	/// @pre 存在main_coroutine
-	explicit Coroutine(std::function<void()> func, uint32_t stack_size = 1024 * 1024);
+	explicit Coroutine(std::function<void()> func, uint32_t stack_size = 1024 * 1024, bool is_dummy_main_coroutine = false);
 
 	~Coroutine() noexcept;
 
@@ -88,6 +93,7 @@ private:
 
 private:
 	std::function<void()> func_ = nullptr;
+	bool isDummyMainCoroutine_;
 	void* stackFrame_ = nullptr;
 	uint32_t stackSize_ = 0;
 	CoroutineId id_;

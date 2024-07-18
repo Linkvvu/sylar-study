@@ -74,7 +74,7 @@ private:
 
 private:
     std::string name_;
-    std::unique_ptr<concurrency::Coroutine> dummyMainCoroutine_;
+    std::shared_ptr<concurrency::Coroutine> dummyMainCoroutine_;
 	::pthread_t dummyMainTrdPthreadId_;
 	std::unique_ptr<concurrency::EpollPoller> poller_;
     std::vector<std::unique_ptr<concurrency::Thread>> threadPool_;
