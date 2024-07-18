@@ -47,18 +47,15 @@ Scheduler* GetScheduler() {
 
 cc::Scheduler::Scheduler(size_t thread_num, bool include_cur_thread, std::string name)
 	: name_(std::move(name))
-	, dummyMainCoroutine_(include_cur_thread
-			? std::make_unique<cc::Coroutine>(
-					std::bind(&Scheduler::SchedulingFunc, this), 0)
-			: nullptr)
+	, dummyMainCoroutine_(nullptr)
 	, dummyMainTrdPthreadId_(include_cur_thread ? base::GetPthreadId() : INVALID_PTHREAD_ID)
 	, poller_(std::make_unique<cc::EpollPoller>(this))
 	, threadPool_((include_cur_thread ? thread_num - 1 : thread_num))
 {
 	if (include_cur_thread) {
 		cc::this_thread::GetMainCoroutine();
-		cc::this_thread::SetScheduler(this);
 		cc::this_thread::SetSchedulingCoroutine(dummyMainCoroutine_.get());
+		dummyMainCoroutine_ = std::make_shared<cc::Coroutine>(std::bind(&Scheduler::SchedulingFunc, this), 1024 * 10, true);
 	}
 }
 
@@ -68,7 +65,7 @@ cc::Scheduler::~Scheduler() noexcept {
 
 void cc::Scheduler::Start() {
 	bool expected = true;
-	if (stopped_.compare_exchange_strong(expected, false, std::memory_order::memory_order_release)) {
+	if (stopped_.compare_exchange_strong(expected, false, std::memory_order::memory_order_acq_rel)) {
 		for (size_t i = 0; i < threadPool_.size(); ++i) {
 			threadPool_[i].reset(new cc::Thread(
 				[this]() {
@@ -80,8 +77,14 @@ void cc::Scheduler::Start() {
 }
 
 void cc::Scheduler::Stop() {
+	if (dummyMainCoroutine_) {
+		SYLAR_ASSERT_WITH_MSG(base::GetPthreadId() == this->dummyMainTrdPthreadId_,
+			"only can invoke Scheduler::Stop by the thread creating"
+			"the Scheduler instance when enable dummy-main");
+	}
+
 	bool expected = false;
-	if (!stopped_.compare_exchange_strong(expected, true, std::memory_order::memory_order_release)) {
+	if (!stopped_.compare_exchange_strong(expected, true, std::memory_order::memory_order_acq_rel)) {
 		return;
 	}
 
@@ -91,9 +94,18 @@ void cc::Scheduler::Stop() {
 		Notify();
 	}
 
-	// 对于 threadPool_ 的读写操作，理想情况下不加锁也是可以的
-	for (size_t i = 0; i < threadPool_.size(); ++i) {
-		threadPool_[i]->Join();
+	if (dummyMainCoroutine_) {
+		dummyMainCoroutine_->SwapIn();
+	}
+
+	std::vector<std::unique_ptr<concurrency::Thread>> tmp_pool;
+	{
+		std::lock_guard<std::mutex> guard(mutex_);
+		tmp_pool.swap(this->threadPool_);
+	}
+
+	for (size_t i = 0; i < tmp_pool.size(); ++i) {
+		tmp_pool[i]->Join();
 	}
 }
 
@@ -105,15 +117,19 @@ bool cc::Scheduler::IsStopped() const {
 void cc::Scheduler::SchedulingFunc() {
 	// set the scheduler(this)
 	cc::this_thread::SetScheduler(this);
+
 	// create main coroutine for current (each) thread
 	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine();
 
 	if (this->dummyMainCoroutine_ && base::GetPthreadId() == this->dummyMainTrdPthreadId_) {
-		// set Scheduler::root-routine as the scheduling coroutine of this thread
+		// set dummy-routine as the scheduling coroutine of this thread
 		cc::this_thread::SetSchedulingCoroutine(dummyMainCoroutine_.get());
+		SYLAR_ASSERT(this->dummyMainCoroutine_ == this_thread::GetCurrentRunningCoroutine());
+		SYLAR_ASSERT(this->dummyMainCoroutine_.get() != cc::this_thread::GetMainCoroutine());
 	} else {
 		// set main-routine of current thread as the scheduling coroutine of this thread
 		cc::this_thread::SetSchedulingCoroutine(scheduling_coroutine);
+		SYLAR_ASSERT(cc::this_thread::GetSchedulingCoroutine() == cc::this_thread::GetMainCoroutine());
 	}
 
 	// create idle_coroutine to handle idle event
@@ -225,6 +241,7 @@ void cc::Scheduler::SchedulingFunc() {
 	}
 
 	cc::this_thread::SetSchedulingCoroutine(nullptr);
+	cc::this_thread::SetScheduler(nullptr);
 }
 
 void cc::Scheduler::HandleIdle() {

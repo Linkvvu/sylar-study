@@ -46,6 +46,8 @@ cc::Coroutine* cc::this_thread::GetMainCoroutine() {
 
 		// sets it as current coroutine for current thread
 		cc::this_thread::SetCurrentRunningCoroutine(tl_sp_main_coroutine.get());
+
+		SYLAR_LOG_FMT_DEBUG(sylar_logger, "main coroutine was constructed, id=%u\n", tl_sp_main_coroutine->GetId());
 	}
 	return tl_sp_main_coroutine.get();
 }
@@ -57,7 +59,8 @@ std::shared_ptr<cc::Coroutine> cc::this_thread::GetCurrentRunningCoroutine() {
 }
 
 cc::Coroutine::Coroutine()
-	: id_(s_coroutine_next_id.fetch_add(1, std::memory_order::memory_order_relaxed))
+	: isDummyMainCoroutine_(false)
+	, id_(s_coroutine_next_id.fetch_add(1, std::memory_order::memory_order_relaxed))
 	, state_(State::kExec)
 {
 	SYLAR_ASSERT(this_thread::tl_sp_main_coroutine == nullptr);
@@ -72,8 +75,9 @@ cc::Coroutine::Coroutine()
 	s_coroutine_count.fetch_add(1, std::memory_order::memory_order_relaxed);
 }
 
-cc::Coroutine::Coroutine(std::function<void()> func, uint32_t stack_size)
+cc::Coroutine::Coroutine(std::function<void()> func, uint32_t stack_size, bool is_dummy_main_coroutine)
 	: func_(std::move(func))
+	, isDummyMainCoroutine_(is_dummy_main_coroutine)
 	, stackFrame_(::malloc(stack_size))	///> FixMe
 	, stackSize_(stack_size)
 	, id_(s_coroutine_next_id.fetch_add(1, std::memory_order::memory_order_relaxed))
@@ -105,7 +109,6 @@ cc::Coroutine::Coroutine(std::function<void()> func, uint32_t stack_size)
 
 	// updates counter
 	s_coroutine_count.fetch_add(1, std::memory_order::memory_order_relaxed);
-	SYLAR_LOG_FMT_DEBUG(sylar_logger, "worker coroutine was constructed, id=%u\n", id_);
 }
 
 cc::Coroutine::~Coroutine() noexcept {
@@ -143,23 +146,46 @@ cc::Coroutine::~Coroutine() noexcept {
 }
 
 void cc::Coroutine::SwapIn() {
-	SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this_thread::GetSchedulingCoroutine());
+	if (this->isDummyMainCoroutine_) {
+		// 创建Scheduler的线程的main协程 --> dummy-main coroutine(调度协程) --> Task coroutine
+		SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this_thread::GetMainCoroutine());
+	} else {
+		SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this_thread::GetSchedulingCoroutine());
+	}
+
 	SYLAR_ASSERT(GetState() != State::kExec);
 	this_thread::SetCurrentRunningCoroutine(this);
 	SetState(State::kExec);
-	if (swapcontext(&cc::this_thread::GetMainCoroutine()->ctx_, &this->ctx_)) {
-		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
-		std::abort();
+
+	if (!isDummyMainCoroutine_) {	// main-routine or task-routine
+		if (swapcontext(&cc::this_thread::GetSchedulingCoroutine()->ctx_, &this->ctx_)) {
+			SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
+			std::abort();
+		}
+	} else {	// dummy-main coroutine
+		if (swapcontext(&cc::this_thread::GetMainCoroutine()->ctx_, &this->ctx_)) {
+			SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
+			std::abort();
+		}
 	}
+
 }
 
 void cc::Coroutine::SwapOut() {
-	SYLAR_ASSERT(this_thread::GetCurrentRunningCoroutine().get() == this);
-	this_thread::SetCurrentRunningCoroutine(cc::this_thread::GetSchedulingCoroutine());
+	SYLAR_ASSERT(cc::this_thread::GetCurrentRunningCoroutine().get() == this);
 
-	if (swapcontext(&this->ctx_, &cc::this_thread::GetMainCoroutine()->ctx_)) {
-		SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
-		std::abort();
+	if (!isDummyMainCoroutine_) {
+		this_thread::SetCurrentRunningCoroutine(cc::this_thread::GetSchedulingCoroutine());
+		if (swapcontext(&this->ctx_, &cc::this_thread::GetSchedulingCoroutine()->ctx_)) {
+			SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
+			std::abort();
+		}
+	} else {
+		this_thread::SetCurrentRunningCoroutine(cc::this_thread::GetMainCoroutine());
+		if (swapcontext(&this->ctx_, &cc::this_thread::GetMainCoroutine()->ctx_)) {
+			SYLAR_LOG_FATAL(sylar_logger) << "fail to invoke ::swapcontext, about to abort!" << std::endl;
+			std::abort();
+		}
 	}
 }
 
