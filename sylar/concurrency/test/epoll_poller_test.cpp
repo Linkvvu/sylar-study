@@ -11,6 +11,8 @@ namespace cc = sylar::concurrency;
 
 int sock;
 
+uint32_t timer_id = 0;
+
 void DoConnect(cc::Scheduler* scheduler) {
 	sock = ::socket(AF_INET, SOCK_STREAM, 0);
     ::fcntl(sock, F_SETFL, O_NONBLOCK);
@@ -25,8 +27,18 @@ void DoConnect(cc::Scheduler* scheduler) {
 	if (ret == -1) {
 		if (errno == EINPROGRESS) {
 			SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "add write event" << std::endl;
-			scheduler->UpdateEvent(sock, EPOLLOUT, []() {
+			scheduler->UpdateEvent(sock, EPOLLOUT, [scheduler]() {
 				SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "writeable callback" << std::endl;
+				timer_id = scheduler->RunAfter(std::chrono::milliseconds(500), [scheduler]() {
+					static int count = 5;
+					if (count) {
+						SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "timer cb, count=" << count-- << std::endl;
+					}
+
+					if (count == 1) {
+						scheduler->CancelTimer(timer_id);
+					}
+				}, true);
 				close(sock);
 			});
 		}
@@ -37,6 +49,6 @@ int main() {
 	cc::Scheduler scheduler(3, false, "Test_Scheduler");
 	scheduler.Start();
 	DoConnect(&scheduler);
-	sleep(1);
+	sleep(3);
 	scheduler.Stop();
 }

@@ -2,6 +2,7 @@
 #include <concurrency/thread.h>
 #include <concurrency/notifier.h>
 #include <concurrency/epoll_poller.h>
+#include <concurrency/timer_manager.h>
 #include <base/debug.h>
 
 using namespace sylar;
@@ -265,7 +266,35 @@ void cc::Scheduler::AssertInSchedulingScope() const {
 }
 
 void cc::Scheduler::UpdateEvent(int fd, unsigned interest_events, std::function<void()> func) {
+	// AssertInSchedulingScope();
 	poller_->UpdateEvent(fd, interest_events, std::move(func));
+}
+
+void cc::Scheduler::CancelEvent(int fd, unsigned target_events) {
+	// AssertInSchedulingScope();
+	poller_->CancelEvent(fd, target_events);
+}
+
+uint32_t cc::Scheduler::RunAt(std::chrono::steady_clock::time_point tp, std::function<void()> cb) {
+	Timer::TimerId id = poller_->GetTimerManager()->GetNextTimerId();
+	Timer new_timer(id, std::move(tp), cc::Timer::Interval::zero(), std::move(cb));
+	poller_->GetTimerManager()->AddTimer(std::move(new_timer));
+	return id;
+}
+
+uint32_t cc::Scheduler::RunAfter(std::chrono::steady_clock::duration dur, std::function<void()> cb, bool repeated) {
+	auto tp = std::chrono::steady_clock::now() + dur;
+	if (repeated) {
+		Timer::TimerId id = poller_->GetTimerManager()->GetNextTimerId();
+		Timer new_timer(id, std::move(tp), std::move(dur), std::move(cb));
+		poller_->GetTimerManager()->AddTimer(std::move(new_timer));
+		return id;
+	}
+    return RunAt(tp, std::move(cb));
+}
+
+void sylar::concurrency::Scheduler::CancelTimer(uint32_t timer_id) {
+	poller_->GetTimerManager()->CancelTimer(timer_id);
 }
 
 cc::Scheduler::InvocableWrapper::InvocableWrapper(const std::shared_ptr<cc::Coroutine>& co, ::pthread_t pthread_id)

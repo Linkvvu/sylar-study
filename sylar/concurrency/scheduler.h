@@ -44,6 +44,14 @@ public:
 
 	void UpdateEvent(int fd, unsigned interest_events, std::function<void()> func);
 
+	void CancelEvent(int fd, unsigned target_events);
+
+	uint32_t RunAt(std::chrono::steady_clock::time_point tp, std::function<void()> cb);
+
+	uint32_t RunAfter(std::chrono::steady_clock::duration dur, std::function<void()> cb, bool repeated = false);
+
+	void CancelTimer(uint32_t timer_id);
+
 private:
 	void SchedulingFunc();
 

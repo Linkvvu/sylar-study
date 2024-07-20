@@ -5,15 +5,15 @@
 namespace sylar {
 namespace concurrency {
 
-class Scheduler;
+class EpollPoller;
 
 class Notifier {
 public:
-	Notifier(Scheduler* owner);
+	Notifier(EpollPoller* owner);
 
 	~Notifier() noexcept;
 
-	/// @brief 信号量累加1
+	/// @brief 信号量累加 @a num
 	void Notify(uint64_t num = 1);
 
 	int GetEventFd()
@@ -22,7 +22,7 @@ public:
 	void HandleEventFd();
 
 private:
-	Scheduler* owner_;
+	EpollPoller* owner_;
 	int eventFd_;
 };
 

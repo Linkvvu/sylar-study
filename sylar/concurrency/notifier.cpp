@@ -12,19 +12,18 @@ namespace cc = sylar::concurrency;
 
 static auto sys_logger = SYLAR_SYS_LOGGER();
 
-cc::Notifier::Notifier(Scheduler* owner)
+cc::Notifier::Notifier(EpollPoller* owner)
 	: owner_(owner)
 	, eventFd_(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK | EFD_SEMAPHORE))
 {
 	if (eventFd_ < 0) {
-		SYLAR_LOG_FATAL(sys_logger) << "failed to create event-fd object, about to exit" << std::endl;
+		SYLAR_LOG_FATAL(sys_logger) << "failed to create eventfd object, about to exit" << std::endl;
 		std::abort();
 	}
 }
 
 
 cc::Notifier::~Notifier() {
-	// owner_->RemoveEvent();
 	::close(eventFd_);
 }
 
