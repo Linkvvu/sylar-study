@@ -41,7 +41,7 @@ void cc::Notifier::HandleEventFd() {
 	char temp_buffer[64] {};
 	int ret = ::read(eventFd_, temp_buffer, 64);
 	if (__builtin_expect(ret < 0, 0)) {
-		SYLAR_LOG_ERROR(sys_logger) << "failed to invoke ::read on eventfd object"
-			<<", errno=" << errno << ", errstr:" << std::strerror(errno) << std::endl;
+		SYLAR_LOG_WARN(sys_logger) << "failed to invoke ::read on eventfd object"
+			<<", errno=" << errno << ", errstr: " << std::strerror(errno) << std::endl;
 	}
 }
