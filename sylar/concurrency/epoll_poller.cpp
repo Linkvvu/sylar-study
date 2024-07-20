@@ -2,6 +2,7 @@
 #include <base/debug.h>
 #include <concurrency/notifier.h>
 #include <concurrency/epoll_poller.h>
+#include <concurrency/timer_manager.h>
 
 #include <cstring>
 #include <sys/stat.h>
@@ -18,7 +19,8 @@ static auto sylar_logger = SYLAR_ROOT_LOGGER();
 cc::EpollPoller::EpollPoller(Scheduler* owner)
 	: owner_(owner)
 	, epollFd_(::epoll_create1(O_CLOEXEC))
-	, notifier_(std::make_unique<Notifier>(owner))
+	, notifier_(std::make_unique<Notifier>(this))
+	, timerManager_(std::make_unique<TimerManager>(this))
 {
 	if (epollFd_ == -1) {
 		SYLAR_LOG_FMT_FATAL(sys_logger, "failed to invoke ::epoll_create, errno=%d, errstr: %s, about to exit\n"
@@ -27,16 +29,23 @@ cc::EpollPoller::EpollPoller(Scheduler* owner)
 	}
 
 	/// FIXME:
-	///		重构Notifier与Poller的关系
+	///		重构Notifier/TimerManager与Poller的关系
 	struct ::epoll_event notifier_e_e;
 	std::memset(&notifier_e_e, 0, sizeof(::epoll_event));
 	notifier_e_e.data.fd = notifier_->GetEventFd();
 	notifier_e_e.events = EPOLLIN;
 	::epoll_ctl(epollFd_, EPOLL_CTL_ADD, notifier_->GetEventFd(), &notifier_e_e);
+
+	struct ::epoll_event timerfd_e_e;
+	std::memset(&timerfd_e_e, 0, sizeof(::epoll_event));
+	timerfd_e_e.data.fd = timerManager_->GetTimerFd();
+	timerfd_e_e.events = EPOLLIN | EPOLLET;
+	::epoll_ctl(epollFd_, EPOLL_CTL_ADD, timerManager_->GetTimerFd(), &timerfd_e_e);
 }
 
 cc::EpollPoller::~EpollPoller() noexcept {
 	::epoll_ctl(epollFd_, EPOLL_CTL_DEL, notifier_->GetEventFd(), nullptr);
+	::epoll_ctl(epollFd_, EPOLL_CTL_DEL, timerManager_->GetTimerFd(), nullptr);
 	::close(epollFd_);
 
 	for (const auto& pair : eventSet_) {
@@ -174,6 +183,9 @@ void cc::EpollPoller::HandleReadyEvents(epoll_event* ready_event_array, size_t l
 
 		if (cur_e_e.data.fd == notifier_->GetEventFd()) {
 			notifier_->HandleEventFd();
+			continue;
+		} else if (cur_e_e.data.fd == timerManager_->GetTimerFd()) {
+			timerManager_->HandleExpiredTimers();
 			continue;
 		}
 

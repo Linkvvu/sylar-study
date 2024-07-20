@@ -9,6 +9,7 @@ namespace sylar {
 namespace concurrency {
 
 class Notifier;
+class TimerManager;
 
 struct Event {
 	enum class StateIndex : uint8_t {
@@ -55,8 +56,14 @@ public:
 
 	void CancelEvent(int fd, unsigned target_events);
 
+	Scheduler* GetScheduler() const
+	{ return owner_; }
+
 	Notifier* GetNotifier() const
 	{ return notifier_.get(); }
+
+	TimerManager* GetTimerManager() const
+	{ return timerManager_.get(); }
 
 private:
 	Event* GetOrCreateEventObj(int fd);
@@ -79,10 +86,11 @@ private:
 
 
 private:
-	concurrency::Scheduler* owner_;
+	concurrency::Scheduler* const owner_;
 	int epollFd_;
 	std::unordered_map<int, Event*> eventSet_;
-	std::unique_ptr<Notifier> notifier_;
+	std::unique_ptr<concurrency::Notifier> notifier_;
+	std::unique_ptr<concurrency::TimerManager> timerManager_;
 	mutable std::shared_mutex mutex_;
 };
 
