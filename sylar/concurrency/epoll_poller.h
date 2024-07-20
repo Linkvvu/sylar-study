@@ -30,14 +30,14 @@ struct Event {
 	void Reset() {
 		this->fd = -1;
 		this->interest_event = 0;
-		this->state_index = StateIndex::kNew;
+		this->state = StateIndex::kNew;
 		this->read_context = {};
 		this->write_context = {};
 	}
 
 	int fd = -1;
 	unsigned interest_event = 0;
-	StateIndex state_index = StateIndex::kNew;
+	StateIndex state = StateIndex::kNew;
 	// unsigned ready_event;
 	std::mutex mutex;
 };
@@ -53,8 +53,14 @@ public:
 
 	void UpdateEvent(int fd, unsigned interest_events, std::function<void()> func);
 
+	void CancelEvent(int fd, unsigned target_events);
+
 	Notifier* GetNotifier() const
 	{ return notifier_.get(); }
+
+private:
+	Event* GetOrCreateEventObj(int fd);
+	void CancelEvent(Event* event, unsigned target_events);
 
 private:
 	enum class EventEnum : unsigned {
@@ -62,9 +68,9 @@ private:
 		kWrite
 	};
 
-	void HandleReadyEvent(epoll_event* ready_event_array, size_t length);
-	void HandleEpollEvent(Event* event_instance, unsigned ready_event);
-	void TriggerAndRemove(Event* event, EventEnum flag);
+	void HandleReadyEvents(epoll_event* ready_event_array, size_t length);
+	void HandleEpollEvents(Event* event_instance, unsigned ready_event);
+	void EnqueueAndRemove(Event* event, EventEnum flag);
 
 	/// @brief Update to epoll object
 	void Update(int op, Event* event);

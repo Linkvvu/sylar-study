@@ -24,8 +24,7 @@ void DoConnect(cc::Scheduler* scheduler) {
     int ret = connect(sock, (const sockaddr*)&addr, sizeof(addr));
 	if (ret == -1) {
 		if (errno == EINPROGRESS) {
-			SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "add write event, errno=" << errno
-					<< ", errstr: " << std::strerror(errno) << std::endl;
+			SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "add write event" << std::endl;
 			scheduler->UpdateEvent(sock, EPOLLOUT, []() {
 				SYLAR_LOG_INFO(SYLAR_ROOT_LOGGER()) << "writeable callback" << std::endl;
 				close(sock);
