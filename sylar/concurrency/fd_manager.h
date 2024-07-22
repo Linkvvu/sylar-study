@@ -15,8 +15,10 @@ struct FdContext {
 	explicit FdContext(int fd);
 
 	int fd;
-	bool is_socket;
-	bool user_set_nonblock;
+	bool is_closed : 1;
+	bool is_socket : 1;
+	bool sys_set_nonblock : 1;
+	bool user_set_nonblock : 1;
 	clock::duration r_timeout;
 	clock::duration w_timeout;
 };
@@ -29,6 +31,8 @@ public:
 	FdContext& CreateFdContext(int fd);
 
 	FdContext& GetFdContext(int fd);
+
+	bool IsExist(int fd);
 
 	void RemoveFd(int fd);
 

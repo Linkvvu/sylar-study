@@ -9,3 +9,6 @@ target_link_libraries(scheduler_test PUBLIC ${PROJECT_NAME})
 
 add_executable(epoll_poller_test epoll_poller_test.cpp)
 target_link_libraries(epoll_poller_test PUBLIC ${PROJECT_NAME})
+
+add_executable(hook_test hook_test.cpp)
+target_link_libraries(hook_test PUBLIC ${PROJECT_NAME})
