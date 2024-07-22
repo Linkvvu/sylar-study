@@ -3,6 +3,7 @@
 #include <concurrency/notifier.h>
 #include <concurrency/epoll_poller.h>
 #include <concurrency/timer_manager.h>
+#include <concurrency/hook.h>
 #include <base/debug.h>
 
 using namespace sylar;
@@ -118,6 +119,8 @@ bool cc::Scheduler::IsStopped() const {
 void cc::Scheduler::SchedulingFunc() {
 	// set the scheduler(this)
 	cc::this_thread::SetScheduler(this);
+
+	cc::this_thread::EnableHook(true);
 
 	// create main coroutine for current (each) thread
 	auto scheduling_coroutine = cc::this_thread::GetMainCoroutine();

@@ -9,6 +9,7 @@ set(
   notifier.cpp
   timer_manager.cpp
   fd_manager.cpp
+  hook.cpp
 )
 
 source_group(${PROJECT_NAME} FILES ${SYLAR_CONCURRENCY_SRC})
@@ -19,6 +20,7 @@ target_link_libraries(
 	PUBLIC
   pthread
   sylar_base
+  dl
 )
 
 if(ENABLE_TEST MATCHES ON)

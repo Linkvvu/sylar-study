@@ -15,22 +15,13 @@ static auto sylar_logger = SYLAR_ROOT_LOGGER();
 
 cc::FdContext::FdContext(int a_fd)
 	: fd(a_fd)
+	, is_closed(false)
 	, is_socket(false)
+	, sys_set_nonblock(false)
 	, user_set_nonblock(false)
 	, r_timeout(clock::duration::max())
 	, w_timeout(clock::duration::max())
 {
-	// update nonblock flag And socket flag
-	int flags = cc::fcntl_libc_func(fd, F_GETFL);
-	if (flags == -1) {
-		if (errno == EBADF) {
-			throw std::invalid_argument("fd is not an open file descriptor");
-		} else {
-			throw std::runtime_error("failed to init the fd context, errstr: " + std::string(std::strerror(errno)));
-		}
-	}
-	user_set_nonblock = flags & O_NONBLOCK;
-
 	struct ::stat stat_buf;
 	if (::fstat(fd, &stat_buf) < 0) {
 		SYLAR_LOG_ERROR(sylar_logger) << "failed to get the status of fd "
@@ -38,13 +29,33 @@ cc::FdContext::FdContext(int a_fd)
 	} else {
 		is_socket = S_ISSOCK(stat_buf.st_mode);
 	}
+
+	if (is_socket) {
+		int flags = cc::fcntl_libc_func(fd, F_GETFL);
+		if (flags == -1) {
+			if (errno == EBADF) {
+				throw std::invalid_argument("fd is not an open file descriptor");
+			} else {
+				throw std::runtime_error("failed to init the fd context, errstr: " + std::string(std::strerror(errno)));
+			}
+		}
+
+		sys_set_nonblock = flags & O_NONBLOCK;
+		if (not sys_set_nonblock) {
+			int ret = cc::fcntl_libc_func(fd, F_SETFL, O_NONBLOCK);
+			SYLAR_ASSERT(ret);
+			sys_set_nonblock = true;
+		}
+	} else {
+		// sys_set_nonblock = false;
+	}
 }
 
 
 cc::FdContext& cc::FdManager::CreateFdContext(int fd) {
 	std::lock_guard<std::shared_mutex> guard(rwMutex_);
 	SYLAR_ASSERT(fdSet_.count(fd) == 0);
-	auto pair = fdSet_.emplace(fd);
+	auto pair = fdSet_.emplace(fd, cc::FdContext(fd));
 	SYLAR_ASSERT(pair.second);
 	return pair.first->second;
 }
@@ -52,7 +63,12 @@ cc::FdContext& cc::FdManager::CreateFdContext(int fd) {
 cc::FdContext& cc::FdManager::GetFdContext(int fd) {
 	std::shared_lock<std::shared_mutex> shared_guard(rwMutex_);
 	SYLAR_ASSERT(fdSet_.count(fd));
-	return fdSet_[fd];
+	return fdSet_.at(fd);
+}
+
+bool cc::FdManager::IsExist(int fd) {
+	std::shared_lock<std::shared_mutex> shared_lock(rwMutex_);
+	return fdSet_.count(fd) == 1 ? true : false;
 }
 
 void cc::FdManager::RemoveFd(int fd) {
