@@ -38,6 +38,8 @@ cc::TimerManager::~TimerManager() noexcept {
 }
 
 void cc::TimerManager::AddTimer(Timer timer) {
+	SYLAR_ASSERT(timer.timeout_tp != decltype(timer.timeout_tp)::max());
+
 	std::lock_guard<std::mutex> guard(mutex_);
 	auto cur_timeout_tp = timer.timeout_tp;
 	bool latest_need_update = AddToHeap(std::move(timer));
