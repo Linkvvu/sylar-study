@@ -3,6 +3,7 @@
 #include <set>
 #include <mutex>
 #include <chrono>
+#include <memory>
 #include <functional>
 
 namespace sylar {
@@ -49,11 +50,18 @@ public:
 
 	void AddTimer(Timer);
 
+	void AddConditionTimer(Timer, std::weak_ptr<void> cond);
+
 	void CancelTimer(Timer::TimerId);
+
+	bool HasTimer(Timer::TimerId);
 
 	void HandleExpiredTimers();
 
 	static Timer::TimerId GetNextTimerId();
+
+public:
+	constexpr static const Timer::TimerId kInvalidTimerId = 0;
 
 private:
 	bool AddToHeap(Timer&& timer);

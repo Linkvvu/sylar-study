@@ -285,6 +285,17 @@ uint32_t cc::Scheduler::RunAt(std::chrono::steady_clock::time_point tp, std::fun
 	return id;
 }
 
+uint32_t sylar::concurrency::Scheduler::RunAtIf(std::chrono::steady_clock::time_point tp, std::weak_ptr<void> cond, std::function<void()> cb) {
+	Timer::TimerId id = poller_->GetTimerManager()->GetNextTimerId();
+	Timer new_timer(id, std::move(tp), cc::Timer::Interval::zero(), std::move(cb));
+	poller_->GetTimerManager()->AddConditionTimer(std::move(new_timer), std::move(cond));
+    return id;
+}
+
+bool sylar::concurrency::Scheduler::HasTimer(uint32_t timer_id) {
+    return poller_->GetTimerManager()->HasTimer(timer_id);
+}
+
 uint32_t cc::Scheduler::RunAfter(std::chrono::steady_clock::duration dur, std::function<void()> cb, bool repeated) {
 	auto tp = std::chrono::steady_clock::now() + dur;
 	if (repeated) {
@@ -294,6 +305,17 @@ uint32_t cc::Scheduler::RunAfter(std::chrono::steady_clock::duration dur, std::f
 		return id;
 	}
     return RunAt(tp, std::move(cb));
+}
+
+uint32_t sylar::concurrency::Scheduler::RunAfterIf(std::chrono::steady_clock::duration dur, std::weak_ptr<void> cond, std::function<void()> cb, bool repeated) {
+	auto tp = std::chrono::steady_clock::now() + dur;
+	if (repeated) {
+		Timer::TimerId id = poller_->GetTimerManager()->GetNextTimerId();
+		Timer new_timer(id, std::move(tp), std::move(dur), std::move(cb));
+		poller_->GetTimerManager()->AddConditionTimer(std::move(new_timer), std::move(cond));
+		return id;
+	}
+    return RunAtIf(tp, std::move(cond), std::move(cb));
 }
 
 void sylar::concurrency::Scheduler::CancelTimer(uint32_t timer_id) {

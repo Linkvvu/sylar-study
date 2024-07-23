@@ -2,6 +2,8 @@
 
 #include <base/singleton.hpp>
 
+
+#include <sys/epoll.h>
 #include <chrono>
 #include <shared_mutex>
 #include <unordered_map>
@@ -13,6 +15,16 @@ struct FdContext {
 	using clock = std::chrono::steady_clock;
 
 	explicit FdContext(int fd);
+
+	const clock::duration& GetTimeout(unsigned event) {
+		if (event & EPOLLIN) {
+			return r_timeout;
+		} else if (event & EPOLLOUT) {
+			return w_timeout;
+		} else {
+			throw std::invalid_argument("passing a invalid event, hasn't the timeout for this event");
+		}
+	}
 
 	int fd;
 	bool is_closed : 1;

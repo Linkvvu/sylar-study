@@ -47,8 +47,10 @@ public:
 	void CancelEvent(int fd, unsigned target_events);
 
 	uint32_t RunAt(std::chrono::steady_clock::time_point tp, std::function<void()> cb);
-
+	uint32_t RunAtIf(std::chrono::steady_clock::time_point tp, std::weak_ptr<void> cond, std::function<void()> cb);
+	bool HasTimer(uint32_t timer_id);
 	uint32_t RunAfter(std::chrono::steady_clock::duration dur, std::function<void()> cb, bool repeated = false);
+	uint32_t RunAfterIf(std::chrono::steady_clock::duration dur, std::weak_ptr<void> cond, std::function<void()> cb, bool repeated = false);
 
 	void CancelTimer(uint32_t timer_id);
 
