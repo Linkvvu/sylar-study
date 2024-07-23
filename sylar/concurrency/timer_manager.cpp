@@ -23,7 +23,7 @@ static int CreateTimerFd() {
     return fd;
 }
 
-static std::atomic<cc::Timer::TimerId> gs_next_timer_id(0);
+static std::atomic<cc::Timer::TimerId> gs_next_timer_id(1);
 
 } // namespace
 
@@ -49,14 +49,35 @@ void cc::TimerManager::AddTimer(Timer timer) {
 	}
 }
 
+void cc::TimerManager::AddConditionTimer(Timer t, std::weak_ptr<void> cond) {
+	auto copy = std::move(t.cb);
+	t.cb = [cb = std::move(copy), cond = std::move(cond)]() {
+		if (cond.lock()) {
+			SYLAR_ASSERT(cb);
+			cb();
+		}
+	};
+
+	AddTimer(std::move(t));
+}
+
 void cc::TimerManager::CancelTimer(Timer::TimerId target) {
 	std::lock_guard<std::mutex> guard(mutex_);
 	auto it = std::find_if(timerList_.begin(), timerList_.end(), [target](const Timer& t) {
 		return t.id == target;
 	});
 
-	SYLAR_ASSERT(it != timerList_.end());
+	// SYLAR_ASSERT(it != timerList_.end());	do noting if not exist
 	RemoveFromHeap(it);
+}
+
+bool sylar::concurrency::TimerManager::HasTimer(Timer::TimerId id) {
+	std::lock_guard<std::mutex> guard(mutex_);
+	auto it = std::find_if(timerList_.begin(), timerList_.end(), [id](const Timer& t) {
+		return t.id == id;
+	});
+
+    return it != timerList_.end();
 }
 
 

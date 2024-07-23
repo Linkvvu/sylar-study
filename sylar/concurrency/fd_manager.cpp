@@ -40,10 +40,11 @@ cc::FdContext::FdContext(int a_fd)
 			}
 		}
 
+		/// TODO: 处理用户通过socket接口设置NONBLOCK阻塞的情况
 		sys_set_nonblock = flags & O_NONBLOCK;
 		if (not sys_set_nonblock) {
 			int ret = cc::fcntl_libc_func(fd, F_SETFL, O_NONBLOCK);
-			SYLAR_ASSERT(ret);
+			SYLAR_ASSERT(ret == 0);
 			sys_set_nonblock = true;
 		}
 	} else {

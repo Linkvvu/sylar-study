@@ -2,6 +2,8 @@
 
 #include <time.h>		// for nanosleep
 #include <unistd.h>		// for usleep
+#include <sys/types.h>
+#include <sys/socket.h>
 
 namespace sylar {
 namespace concurrency {
@@ -20,6 +22,26 @@ extern socket_libc_func_t socket_libc_func;
 
 using fcntl_libc_func_t = int (*)(int fd, int cmd, ... /* arg */ );
 extern fcntl_libc_func_t fcntl_libc_func;
+
+using getsockopt_libc_func_t = int (*)(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+extern getsockopt_libc_func_t getsockopt_libc_func;
+
+using setsockopt_libc_func_t = int (*)(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+extern setsockopt_libc_func_t setsockopt_libc_func;
+
+using connect_libc_func_t = int (*)(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+extern connect_libc_func_t connect_libc_func;
+
+using accept_libc_func_t = int (*)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+extern accept_libc_func_t accept_libc_func;
+
+using read_libc_func_t = ssize_t (*)(int fd, void *buf, size_t count);
+extern read_libc_func_t read_libc_func;
+
+using write_libc_func_t = ssize_t (*)(int fd, const void *buf, size_t count);
+extern write_libc_func_t write_libc_func;
+
+
 
 
 namespace this_thread {
