@@ -268,6 +268,10 @@ void cc::Scheduler::AssertInSchedulingScope() const {
 		"runs outside the scheduling scope");
 }
 
+void cc::Scheduler::AppendEvent(int fd, unsigned interest_events, std::function<void()> func) {
+	poller_->AppendEvent(fd, interest_events, std::move(func));
+}
+
 void cc::Scheduler::UpdateEvent(int fd, unsigned interest_events, std::function<void()> func) {
 	// AssertInSchedulingScope();
 	poller_->UpdateEvent(fd, interest_events, std::move(func));

@@ -132,7 +132,7 @@ static ssize_t do_io(OriginalLibcFunc libc_func, int fd, unsigned interest_event
 				});
 			}
 
-			cur_scheduler->UpdateEvent(fd, interest_event, nullptr);
+			cur_scheduler->AppendEvent(fd, interest_event, nullptr);
 
 			cc::Coroutine::YieldCurCoroutineToHold();
 			if (not tie->is_timeout) {

@@ -52,6 +52,12 @@ public:
 	/// @brief Poll and handle ready events, wrap events as a coroutine
 	void PollAndHandle();
 
+	/// @brief Append events to the specified fd
+	/// @param fd  target fd
+	/// @param interest_events  the registered events
+	/// @param func  the callback associaled the events
+	void AppendEvent(int fd, unsigned interest_events, std::function<void()> func);
+
 	void UpdateEvent(int fd, unsigned interest_events, std::function<void()> func);
 
 	void CancelEvent(int fd, unsigned target_events);
@@ -91,7 +97,7 @@ private:
 	std::unordered_map<int, Event*> eventSet_;
 	std::unique_ptr<concurrency::Notifier> notifier_;
 	std::unique_ptr<concurrency::TimerManager> timerManager_;
-	mutable std::shared_mutex mutex_;
+	mutable std::shared_mutex rwMutex_;
 };
 
 } // namespace concurrency

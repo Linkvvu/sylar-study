@@ -72,7 +72,7 @@ void cc::EpollPoller::UpdateEvent(int fd, unsigned interest_events, std::functio
 	// add callback
 	if (interest_events & EPOLLIN) {
 		if (func) {
-			event->read_context.func = std::move(func);
+			event->read_context.func = func;
 		} else {
 			event->read_context.co = cc::this_thread::GetCurrentRunningCoroutine();		/// ?????
 		}
@@ -127,14 +127,14 @@ void sylar::concurrency::EpollPoller::CancelEvent(Event* event, unsigned target_
 
 cc::Event* cc::EpollPoller::GetOrCreateEventObj(int fd) {
 	{	// try to get
-		std::shared_lock<std::shared_mutex> shared_guard(mutex_);
+		std::shared_lock<std::shared_mutex> shared_guard(rwMutex_);
 		bool exist = eventSet_.count(fd);
 		if (exist)
 			return eventSet_[fd];
 	}
 
 	{
-		std::lock_guard<std::shared_mutex> guard(mutex_);
+		std::lock_guard<std::shared_mutex> guard(rwMutex_);
 		if (eventSet_[fd] == nullptr) {
 			auto new_event = new Event();
 			new_event->fd = fd;
@@ -177,6 +177,35 @@ void cc::EpollPoller::PollAndHandle() {
 
 }
 
+void cc::EpollPoller::AppendEvent(int fd, unsigned interest_events, std::function<void()> func) {
+	auto event = GetOrCreateEventObj(fd);
+	std::lock_guard<std::mutex> event_guard(event->mutex);
+
+	// append events
+	event->interest_event |= (EPOLLET | interest_events);
+	int op = event->state == Event::StateIndex::kAdded
+		? EPOLL_CTL_MOD
+		: EPOLL_CTL_ADD;
+	Update(op, event);
+
+	// add callback
+	if (interest_events & EPOLLIN) {
+		if (func) {
+			event->read_context.func = func;
+		} else {
+			event->read_context.co = cc::this_thread::GetCurrentRunningCoroutine();
+		}
+	}
+
+	if (interest_events & EPOLLOUT) {
+		if (func) {
+			event->write_context.func = std::move(func);
+		} else {
+			event->read_context.co = cc::this_thread::GetCurrentRunningCoroutine();
+		}
+	}
+}
+
 void cc::EpollPoller::HandleReadyEvents(epoll_event* ready_event_array, size_t length) {
 	for (size_t i = 0; i < length; ++i) {
 		auto cur_e_e = ready_event_array[i];
@@ -193,7 +222,7 @@ void cc::EpollPoller::HandleReadyEvents(epoll_event* ready_event_array, size_t l
 
 #ifndef NDEBUG
 		{
-			std::shared_lock<std::shared_mutex> read_lock(this->mutex_);
+			std::shared_lock<std::shared_mutex> read_lock(this->rwMutex_);
 			SYLAR_ASSERT(eventSet_.count(current_event->fd) == 1);
 			SYLAR_ASSERT(eventSet_[current_event->fd] == current_event);
 		}
