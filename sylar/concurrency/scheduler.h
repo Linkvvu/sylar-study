@@ -42,6 +42,8 @@ public:
 	/// @brief 断言当前是否在该调度器所管理的线程中执行
 	void AssertInSchedulingScope() const;
 
+	void AppendEvent(int fd, unsigned interest_events, std::function<void()> func);
+
 	void UpdateEvent(int fd, unsigned interest_events, std::function<void()> func);
 
 	void CancelEvent(int fd, unsigned target_events);
